@@ -8,7 +8,53 @@ from openai import APIConnectionError
 
 from .services.nebius import ProviderError, complete_json
 from .services import resources as resource_service
-from .services.tutor import contains_solution_disclosure
+from .services.tutor import contains_solution_disclosure, validate_learning_step
+
+
+def generated_step(title="Review the key concept", status="available"):
+    return {
+        "id": title.lower().replace(" ", "-"),
+        "title": title,
+        "objective": "Explain the relevant mathematical property.",
+        "instructions": "Review the stated idea, then show how it applies.",
+        "prerequisite_concepts": ["linear equations"],
+        "practice_prompt": "Explain why this step is valid.",
+        "validation_criteria": "Your reasoning identifies the property and justifies its use.",
+        "hints": [
+            "Recall the main idea.",
+            "Review the definition of the property.",
+            "Which property applies to this step?",
+            "Try stating how the property justifies the transformation.",
+        ],
+        "status": status,
+        "attempts": [],
+        "hint_level": 0,
+    }
+
+
+def analysis_response():
+    return {
+        "summary": "This problem uses inverse operations.",
+        "concepts": ["linear equations"],
+        "prerequisites": ["integer arithmetic"],
+        "learning_path": ["Review equality", "Practice inverse operations"],
+        "steps": [
+            generated_step("Review equality"),
+            generated_step("Practice inverse operations", "locked"),
+        ],
+    }
+
+
+def completed_validation():
+    return {
+        "status": "completed",
+        "correct_parts": ["Explains why applying the same operation preserves equality."],
+        "issues": [],
+        "feedback": "Your justification meets this checkpoint's objective.",
+        "next_prompt": "Continue to the next learning step.",
+        "hint_available": True,
+        "step_completed": True,
+    }
 
 
 class UnstuckViewsTests(TestCase):
@@ -26,6 +72,24 @@ class UnstuckViewsTests(TestCase):
             **self.headers,
         )
 
+    def seed_learning_session(self):
+        first = generated_step()
+        second = generated_step("Use the property", "locked")
+        session = self.client.session
+        session["learning_session"] = {
+            "assignment": "Prove the inequality",
+            "context": "",
+            "summary": "Review a property.",
+            "concepts": ["norms"],
+            "prerequisites": ["linear algebra"],
+            "learning_path": [first["title"], second["title"]],
+            "steps": [first, second],
+            "active_step_id": first["id"],
+        }
+        session.save()
+        self.client.cookies["sessionid"] = session.session_key
+        return first, second
+
     def test_homepage_renders_interface_and_csrf_token(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
@@ -41,11 +105,40 @@ class UnstuckViewsTests(TestCase):
     @patch(
         "tutor.services.tutor.complete_json",
         return_value={
-            "summary": "This problem uses inverse operations.",
-            "concepts": ["linear equations"],
+            "summary": "Review equality and inverse operations.",
+            "concepts": ["linear equations", "inverse operations"],
             "prerequisites": ["integer arithmetic"],
             "learning_path": ["Review equality", "Practice inverse operations"],
-            "search_queries": ["solving linear equations"],
+            "steps": [
+                {
+                    "title": "Review equality",
+                    "objective": "Explain what keeps an equation balanced.",
+                    "instructions": "Describe why the same operation must be applied to each side.",
+                    "prerequisite_concepts": ["integer arithmetic"],
+                    "practice_prompt": "Explain why subtracting the same value from each side preserves equality.",
+                    "validation_criteria": "State the balance property and apply it to both sides.",
+                    "hints": [
+                        "Think of equality as a balance.",
+                        "Recall what happens when both sides change equally.",
+                        "Which operation must happen to both sides?",
+                        "Name the balance property and apply it to each side.",
+                    ],
+                },
+                {
+                    "title": "Practice inverse operations",
+                    "objective": "Identify an inverse operation.",
+                    "instructions": "Explain how inverse operations help isolate a variable.",
+                    "prerequisite_concepts": ["linear equations"],
+                    "practice_prompt": "Describe an inverse operation that could be useful.",
+                    "validation_criteria": "Identify the inverse relationship without solving the assignment.",
+                    "hints": [
+                        "Think about operations that undo one another.",
+                        "Addition and subtraction are inverse operations.",
+                        "What operation would undo the operation currently applied?",
+                        "Name the inverse pair and describe how it helps.",
+                    ],
+                },
+            ],
         },
     )
     def test_valid_analysis_returns_learning_path_and_saves_assignment(self, _complete):
@@ -54,7 +147,10 @@ class UnstuckViewsTests(TestCase):
             {"assignment": "Solve x + 2 = 5", "context": "I am new to equations."},
         )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["learning_path"][0], "Review equality")
+        self.assertEqual(response.json()["steps"][0]["status"], "available")
+        self.assertEqual(response.json()["steps"][1]["status"], "locked")
+        self.assertNotIn("hints", response.json()["active_step"])
+        self.assertNotIn("instructions", response.json()["steps"][1])
         self.assertEqual(self.client.session["unstuck"]["context"], "I am new to equations.")
         self.assertEqual(self.client.session["unstuck"]["learning_stage"], "exploring")
 
@@ -74,6 +170,17 @@ class UnstuckViewsTests(TestCase):
             "concepts": ["equations"],
             "prerequisites": ["arithmetic"],
             "learning_path": ["Review inverse operations"],
+            "steps": [
+                {
+                    "title": "Review inverse operations",
+                    "objective": "Use inverse operations",
+                    "instructions": "Review the property.",
+                    "prerequisite_concepts": ["arithmetic"],
+                    "practice_prompt": "Explain the operation.",
+                    "validation_criteria": "State the property.",
+                    "hints": ["Remember inverses.", "Use the definition.", "Which operation?", "Explain the next move."],
+                }
+            ],
             "search_queries": ["inverse operations"],
         },
     )
@@ -150,6 +257,204 @@ class UnstuckViewsTests(TestCase):
             {"concepts": ["fractions"], "feedback": "show_solution"},
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_learning_session_returns_only_active_step_details(self):
+        self.seed_learning_session()
+        response = self.client.get("/api/learning/session/")
+        data = response.json()["session"]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(data["active_step"]["status"], "available")
+        self.assertNotIn("hints", data["active_step"])
+        self.assertNotIn("instructions", data["steps"][1])
+
+    def test_opening_available_step_marks_it_in_progress(self):
+        first, _ = self.seed_learning_session()
+        response = self.client.get(
+            f"/api/learning/session/?step_id={first['id']}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["session"]["active_step"]["status"], "in_progress")
+        self.assertEqual(
+            self.client.session["learning_session"]["steps"][0]["status"],
+            "in_progress",
+        )
+
+    @patch("tutor.views.evaluate_learning_step")
+    def test_locked_step_cannot_be_validated_or_unlocked_by_forged_request(self, evaluate):
+        first, second = self.seed_learning_session()
+        response = self.post(
+            "/api/learning/validate/",
+            {
+                "assignment": "Prove the inequality",
+                "step_id": second["id"],
+                "attempt": "I completed this.",
+                "step_completed": True,
+            },
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            self.client.session["learning_session"]["steps"][1]["status"], "locked"
+        )
+        evaluate.assert_not_called()
+
+    @patch(
+        "tutor.views.evaluate_learning_step",
+        return_value={
+            "status": "needs_revision",
+            "correct_parts": ["Names the relevant inequality."],
+            "issues": ["Does not yet justify the direction."],
+            "feedback": "State why the inequality applies.",
+            "next_prompt": "Which property gives the needed bound?",
+            "hint_available": True,
+            "step_completed": False,
+        },
+    )
+    def test_incorrect_attempt_is_saved_but_does_not_unlock_next(self, _evaluate):
+        first, second = self.seed_learning_session()
+        response = self.post(
+            "/api/learning/validate/",
+            {
+                "assignment": "Prove the inequality",
+                "step_id": first["id"],
+                "attempt": "A partial explanation.",
+            },
+        )
+        state = self.client.session["learning_session"]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(state["steps"][0]["status"], "needs_revision")
+        self.assertEqual(state["steps"][1]["status"], "locked")
+        self.assertEqual(len(state["steps"][0]["attempts"]), 1)
+
+    @patch(
+        "tutor.views.evaluate_learning_step",
+        side_effect=[
+            {
+                "status": "needs_revision",
+                "correct_parts": ["Names the concept."],
+                "issues": ["Needs a justification."],
+                "feedback": "Connect the concept to the step.",
+                "next_prompt": "Which property supports this?",
+                "hint_available": True,
+                "step_completed": False,
+            },
+            completed_validation(),
+        ],
+    )
+    def test_student_can_retry_and_complete_after_revision(self, _evaluate):
+        first, second = self.seed_learning_session()
+        path = "/api/learning/validate/"
+        incomplete = self.post(
+            path,
+            {
+                "assignment": "Prove the inequality",
+                "step_id": first["id"],
+                "attempt": "I identify the property.",
+            },
+        )
+        completed = self.post(
+            path,
+            {
+                "assignment": "Prove the inequality",
+                "step_id": first["id"],
+                "attempt": "I identify and justify the property.",
+            },
+        )
+        state = self.client.session["learning_session"]
+        self.assertEqual(incomplete.json()["status"], "needs_revision")
+        self.assertEqual(completed.json()["status"], "completed")
+        self.assertEqual(len(state["steps"][0]["attempts"]), 2)
+        self.assertEqual(state["steps"][1]["status"], "available")
+
+    @patch("tutor.views.evaluate_learning_step", return_value=completed_validation())
+    def test_successful_validation_unlocks_next_and_persists_history(self, _evaluate):
+        first, second = self.seed_learning_session()
+        response = self.post(
+            "/api/learning/validate/",
+            {
+                "assignment": "Prove the inequality",
+                "step_id": first["id"],
+                "attempt": "The property holds by applying it to both sides.",
+            },
+        )
+        state = self.client.session["learning_session"]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(state["steps"][0]["status"], "completed")
+        self.assertEqual(state["steps"][1]["status"], "available")
+        self.assertEqual(response.json()["session"]["progress"]["completed"], 1)
+        self.assertEqual(state["steps"][0]["attempts"][0]["status"], "completed")
+
+    @patch("tutor.views.evaluate_learning_step", return_value=completed_validation())
+    def test_completed_step_can_be_reopened_without_moving_progress_back(self, _evaluate):
+        first, second = self.seed_learning_session()
+        session = self.client.session["learning_session"]
+        session["steps"][0]["status"] = "completed"
+        session["steps"][1]["status"] = "available"
+        session["active_step_id"] = second["id"]
+        self.client.session["learning_session"] = session
+        self.client.session.save()
+
+        reopened = self.client.get(f"/api/learning/session/?step_id={first['id']}").json()["session"]
+        self.assertEqual(reopened["active_step"]["id"], first["id"])
+        response = self.post(
+            "/api/learning/validate/",
+            {
+                "assignment": "Prove the inequality",
+                "step_id": first["id"],
+                "attempt": "Reviewing my previous reasoning.",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.client.session["learning_session"]["active_step_id"], second["id"])
+
+    @patch("tutor.views.evaluate_learning_step", return_value=completed_validation())
+    def test_completing_last_step_enters_complete_progress_state(self, _evaluate):
+        final = generated_step("Final checkpoint", "in_progress")
+        session = self.client.session
+        session["learning_session"] = {
+            "assignment": "Prove the inequality",
+            "context": "",
+            "summary": "Review a property.",
+            "concepts": ["norms"],
+            "prerequisites": ["linear algebra"],
+            "learning_path": [final["title"]],
+            "steps": [final],
+            "active_step_id": final["id"],
+        }
+        session.save()
+        self.client.cookies["sessionid"] = session.session_key
+        response = self.post(
+            "/api/learning/validate/",
+            {
+                "assignment": "Prove the inequality",
+                "step_id": final["id"],
+                "attempt": "I justify the property.",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["progress_status"], "completed")
+        self.assertEqual(response.json()["session"]["progress"], {"completed": 1, "total": 1})
+
+    def test_hints_are_revealed_one_at_a_time_and_stop_at_available_count(self):
+        first, second = self.seed_learning_session()
+        url = "/api/learning/hint/"
+        payload = {"assignment": "Prove the inequality", "step_id": first["id"]}
+        one = self.post(url, payload)
+        two = self.post(url, payload)
+        self.assertEqual(one.json()["hint_level"], 1)
+        self.assertEqual(one.json()["hint"], first["hints"][0])
+        self.assertEqual(two.json()["hint_level"], 2)
+        self.assertNotIn("hints", one.json())
+        self.assertEqual(self.client.session["learning_session"]["steps"][1]["status"], "locked")
+
+    @patch("tutor.services.tutor.complete_json")
+    def test_analysis_provider_failure_does_not_create_progress(self, complete):
+        complete.side_effect = ProviderError("AI unavailable")
+        response = self.post(
+            "/api/assignments/analyze/",
+            {"assignment": "Prove a matrix inequality"},
+        )
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn("learning_session", self.client.session)
 
     @patch(
         "tutor.services.tutor.complete_json",
@@ -232,6 +537,80 @@ class NebiusServiceTests(TestCase):
         )
         with self.assertRaisesRegex(ProviderError, "could not complete"):
             complete_json("system", "user")
+
+
+class StepValidationServiceTests(TestCase):
+    @patch(
+        "tutor.services.tutor.complete_json",
+        return_value={
+            "status": "completed",
+            "correct_parts": ["The attempt explains the equality property."],
+            "issues": [],
+            "feedback": "This justification meets the objective.",
+            "next_prompt": "Continue to the next idea.",
+            "hint_available": True,
+            "step_completed": True,
+        },
+    )
+    def test_step_attempt_returns_structured_completed_feedback(self, _complete):
+        result = validate_learning_step(
+            "A proof",
+            generated_step(),
+            "Applying the same operation to both sides preserves equality.",
+        )
+        self.assertEqual(result["status"], "completed")
+        self.assertTrue(result["step_completed"])
+        self.assertEqual(result["correct_parts"], ["The attempt explains the equality property."])
+
+    @patch(
+        "tutor.services.tutor.complete_json",
+        return_value={
+            "status": "completed",
+            "correct_parts": [],
+            "issues": ["The stated criterion was not addressed."],
+            "feedback": "Add a justification.",
+            "next_prompt": "Which property can you cite?",
+            "hint_available": True,
+            "step_completed": True,
+        },
+    )
+    def test_completion_flag_without_evidence_is_conservatively_rejected(self, _complete):
+        result = validate_learning_step("A proof", generated_step(), "I am done.")
+        self.assertEqual(result["status"], "needs_revision")
+        self.assertFalse(result["step_completed"])
+
+    @patch(
+        "tutor.services.tutor.complete_json",
+        return_value={
+            "status": "completed",
+            "correct_parts": ["The equality property is identified."],
+            "issues": ["The application is not yet justified."],
+            "feedback": "Explain the application.",
+            "next_prompt": "Why does the property apply?",
+            "hint_available": True,
+            "step_completed": True,
+        },
+    )
+    def test_completed_flag_with_remaining_issues_is_rejected(self, _complete):
+        result = validate_learning_step("A proof", generated_step(), "I use equality.")
+        self.assertEqual(result["status"], "needs_revision")
+        self.assertFalse(result["step_completed"])
+
+    @patch(
+        "tutor.services.tutor.complete_json",
+        return_value={
+            "status": "completed",
+            "correct_parts": ["The criterion is demonstrated."],
+            "issues": [],
+            "feedback": "Good.",
+            "next_prompt": "Continue.",
+            "hint_available": "yes",
+            "step_completed": True,
+        },
+    )
+    def test_malformed_validation_flags_raise_provider_error(self, _complete):
+        with self.assertRaisesRegex(ProviderError, "invalid validation flags"):
+            validate_learning_step("A proof", generated_step(), "Reasoning.")
 
 
 class ResourceSearchTests(TestCase):

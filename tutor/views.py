@@ -11,6 +11,7 @@ from .services.tutor import (
     analyze_assignment as build_analysis,
     check_work as evaluate_work,
     tutor_chat as build_chat_response,
+    validate_learning_step as evaluate_learning_step,
 )
 
 
@@ -19,6 +20,7 @@ MAX_ASSIGNMENT_LENGTH = 6_000
 MAX_CONTEXT_LENGTH = 3_000
 MAX_MESSAGE_LENGTH = 3_000
 MAX_WORKING_LENGTH = 5_000
+MAX_STEP_ATTEMPTS = 10
 VALID_MODES = {"hint", "explain", "check_work"}
 
 
@@ -63,6 +65,64 @@ def _provider_error_response(exc):
     return _error(str(exc), exc.status_code)
 
 
+def _learning_state_for_client(state):
+    steps = state.get("steps", [])
+    summaries = [
+        {"id": step["id"], "title": step["title"], "status": step["status"]}
+        for step in steps
+    ]
+    selected_id = state.get("active_step_id")
+    selected = next((step for step in steps if step["id"] == selected_id), None)
+    if selected is None and steps:
+        selected = next((step for step in steps if step["status"] != "completed"), steps[-1])
+    active = None
+    if selected:
+        active = {
+            key: value
+            for key, value in selected.items()
+            if key != "hints"
+        }
+        active["attempts"] = selected.get("attempts", [])[-MAX_STEP_ATTEMPTS:]
+        active["is_actionable"] = selected["status"] != "locked"
+    completed_count = sum(step["status"] == "completed" for step in steps)
+    return {
+        "assignment": state.get("assignment", ""),
+        "summary": state.get("summary", ""),
+        "concepts": state.get("concepts", []),
+        "prerequisites": state.get("prerequisites", []),
+        "learning_path": state.get("learning_path", []),
+        "steps": summaries,
+        "active_step": active,
+        "progress": {"completed": completed_count, "total": len(steps)},
+    }
+
+
+@require_GET
+def learning_session(request):
+    state = request.session.get("learning_session")
+    if not isinstance(state, dict):
+        return JsonResponse({"available": False, "session": None})
+    selected_id = request.GET.get("step_id")
+    if selected_id:
+        step = next(
+            (item for item in state.get("steps", []) if item.get("id") == selected_id),
+            None,
+        )
+        if step is None:
+            return _error("This learning step was not found.", 404)
+        if step.get("status") == "locked":
+            return _error("Complete the current step before opening this one.", 403)
+        if step.get("status") == "available":
+            step["status"] = "in_progress"
+            request.session["learning_session"] = state
+        session_data = _learning_state_for_client(
+            {**state, "active_step_id": selected_id}
+        )
+        return JsonResponse({"available": True, "session": session_data})
+    session_data = _learning_state_for_client(state)
+    return JsonResponse({"available": True, "session": session_data})
+
+
 @require_POST
 def analyze_assignment(request):
     try:
@@ -77,6 +137,20 @@ def analyze_assignment(request):
     except ProviderError as exc:
         return _provider_error_response(exc)
 
+    state = {
+        "assignment": assignment,
+        "context": context,
+        "learning_stage": "exploring",
+        "hint_level": 0,
+        "history": [],
+        "summary": result["summary"],
+        "concepts": result["concepts"],
+        "prerequisites": result["prerequisites"],
+        "learning_path": result["learning_path"],
+        "steps": result["steps"],
+        "active_step_id": result["steps"][0]["id"],
+    }
+    request.session["learning_session"] = state
     request.session["unstuck"] = {
         "assignment": assignment,
         "context": context,
@@ -84,7 +158,101 @@ def analyze_assignment(request):
         "hint_level": 0,
         "history": [],
     }
+    payload = _learning_state_for_client(state)
+    payload["assignment"] = assignment
+    return JsonResponse(payload)
+
+
+@require_POST
+def validate_step(request):
+    try:
+        payload = _read_json(request)
+        assignment = _text(
+            payload, "assignment", required=True, max_length=MAX_ASSIGNMENT_LENGTH
+        )
+        step_id = _text(payload, "step_id", required=True, max_length=80)
+        attempt = _text(payload, "attempt", required=True, max_length=MAX_WORKING_LENGTH)
+    except RequestValidationError as exc:
+        return _error(str(exc), 400)
+
+    state = request.session.get("learning_session")
+    if not isinstance(state, dict) or state.get("assignment") != assignment:
+        return _error("Start or restore this assignment before submitting a step.", 409)
+    steps = state.get("steps", [])
+    index = next((i for i, item in enumerate(steps) if item.get("id") == step_id), None)
+    if index is None:
+        return _error("This learning step was not found.", 404)
+    step = steps[index]
+    if step.get("status") == "locked":
+        return _error("Complete the current step before opening this one.", 403)
+    if step.get("status") not in {"available", "in_progress", "needs_revision", "completed"}:
+        return _error("This learning step has an invalid status.", 409)
+
+    try:
+        result = evaluate_learning_step(assignment, step, attempt)
+    except ProviderError as exc:
+        return _provider_error_response(exc)
+
+    was_completed = step["status"] == "completed"
+    step["status"] = "completed" if was_completed or result["step_completed"] else "needs_revision"
+    step["attempts"] = (
+        step.get("attempts", [])
+        + [
+            {
+                "attempt": attempt,
+                "status": result["status"],
+                "feedback": result["feedback"],
+                "correct_parts": result["correct_parts"],
+                "issues": result["issues"],
+            }
+        ]
+    )[-MAX_STEP_ATTEMPTS:]
+    if not was_completed and step["status"] == "completed":
+        if index + 1 < len(steps):
+            if steps[index + 1]["status"] == "locked":
+                steps[index + 1]["status"] = "available"
+            state["active_step_id"] = steps[index + 1]["id"]
+        else:
+            state["active_step_id"] = step["id"]
+    else:
+        if not was_completed:
+            step["status"] = "needs_revision"
+            state["active_step_id"] = step["id"]
+    request.session["learning_session"] = state
+    result["progress_status"] = step["status"]
+    result["session"] = _learning_state_for_client(state)
     return JsonResponse(result)
+
+
+@require_POST
+def request_step_hint(request):
+    try:
+        payload = _read_json(request)
+        assignment = _text(
+            payload, "assignment", required=True, max_length=MAX_ASSIGNMENT_LENGTH
+        )
+        step_id = _text(payload, "step_id", required=True, max_length=80)
+    except RequestValidationError as exc:
+        return _error(str(exc), 400)
+
+    state = request.session.get("learning_session")
+    if not isinstance(state, dict) or state.get("assignment") != assignment:
+        return _error("Start or restore this assignment before requesting a hint.", 409)
+    step = next((item for item in state.get("steps", []) if item.get("id") == step_id), None)
+    if step is None:
+        return _error("This learning step was not found.", 404)
+    if step.get("status") == "locked":
+        return _error("Complete the current step before requesting a hint for this one.", 403)
+    level = step.get("hint_level", 0)
+    hints = step.get("hints", [])
+    if not isinstance(level, int) or not isinstance(hints, list) or level >= len(hints):
+        return _error("You have used the available hints for this step.", 409)
+    level += 1
+    step["hint_level"] = level
+    if step.get("status") == "available":
+        step["status"] = "in_progress"
+    request.session["learning_session"] = state
+    return JsonResponse({"hint_level": level, "hint": hints[level - 1], "status": step["status"]})
 
 
 @require_POST

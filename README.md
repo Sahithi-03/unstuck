@@ -54,22 +54,31 @@ Without the Nebius key or model, AI endpoints return a clear configuration error
 ## Learning flow and API
 
 - `GET /` serves the responsive interface and MathLive/KaTeX assets.
-- `POST /api/assignments/analyze/` identifies concepts, prerequisites, and an ordered learning path.
+- `POST /api/assignments/analyze/` identifies concepts, prerequisites, and a short sequence of practice steps.
+- `GET /api/learning/session/` restores the active session; `?step_id=...` opens an unlocked or completed step for review.
+- `POST /api/learning/validate/` validates one active/unlocked step, stores the attempt and feedback, and unlocks the next step only after a structured completion response.
+- `POST /api/learning/hint/` returns exactly the next hint for an unlocked step and tracks the hint level in the session.
 - `POST /api/resources/search/` accepts prerequisite `concepts`, optionally `feedback` (`too_difficult` or `not_helpful`) and `exclude_urls`, then returns up to three concept-focused provider results or a clear unavailable status.
 - `POST /api/tutor/chat/` supports `hint`, `explain`, and `check_work` modes.
 - `POST /api/tutor/check/` gives cautious feedback on the student's current mathematical working.
 
 Resource search makes one focused query per prerequisite concept and asks Tavily to prefer configured educational domains. Cards include source snippets, an objective, and a conceptual checkpoint. A lightweight HEAD request reports link reachability when possible; it does not assess source quality or mathematical accuracy. Feedback buttons refine the next search query and exclude already-shown links. No-provider and provider-failure states do not fabricate resources.
 
-The browser sends same-origin JSON requests with Django CSRF tokens. Assignment and recent conversation context, hint level, and learning stage are kept in the Django session. SQLite is configured as the database; this MVP does not need user accounts or custom database models.
+The browser sends same-origin JSON requests with Django CSRF tokens. Assignment, generated steps, statuses, hint levels, and recent attempts are kept in the Django session. The server enforces step access independently of the interface. Open-ended reasoning is still assessed by the configured language model; structured response checks and conservative completion rules reduce, but cannot eliminate, incorrect judgments.
+
+## Progressive learning loop
+
+Assignment analysis generates between one and six checkpoints. Only the first is initially available. Each step presents its objective, instructions, prerequisite chips, a practice task, and explicit completion criteria. Students can request hints one at a time, submit or revise an attempt, revisit completed attempts, and continue only after validation. Later steps remain locked server-side until a previous checkpoint is accepted. Prerequisite resources open inline so the student's draft remains in place; resource links open in a new tab.
 
 ## Manual smoke test
 
 1. Start Django with the configured environment variables and open the home page.
-2. Paste a problem and analyze it; verify the summary, concepts, prerequisites, and ordered path appear.
+2. Paste a problem and analyze it; verify only the first step is actionable while later steps are locked.
 3. With resource search disabled, verify the interface says discovery is not configured rather than showing fabricated links. Enable Tavily to test concept-focused resource cards.
 4. Try each resource checkpoint, discuss an answer with the tutor, and mark a resource too difficult or unhelpful to request an alternative.
-5. Enter a question and a line of working, request a hint, then ask another question; verify the hint level and conversation continue.
-6. Switch to “Explain a concept” and “Check my thinking”; confirm the responses are mode-appropriate and include uncertainty in working checks.
-7. Try empty input and a deliberately invalid request; verify readable errors appear and the page remains usable.
-8. Inspect mathematical expressions in responses and try the MathLive equation editor.
+5. Open a prerequisite concept, search for resources, close the panel, and verify your draft remains intact.
+6. Request hints sequentially and verify only one additional hint appears per request.
+7. Submit an incomplete attempt; verify targeted feedback appears and the next step remains locked. Revise and resubmit.
+8. Complete a checkpoint and verify the next step unlocks; revisit the completed step and its attempt history.
+9. Try empty input, network/provider errors, and a forged request for a locked step; verify progress does not bypass validation.
+10. Inspect rendered mathematical expressions and try the MathLive equation editor.

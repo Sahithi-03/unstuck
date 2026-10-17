@@ -1,10 +1,12 @@
 import json
+import hashlib
 import re
 
 from .nebius import ProviderError, complete_json
 
 
 MAX_HISTORY_MESSAGES = 8
+MAX_LEARNING_STEPS = 6
 _DISCLOSURE_PATTERNS = (
     re.compile(r"\b(?:the final answer|the answer is|the solution is)\b", re.IGNORECASE),
     re.compile(r"\bsolving (?:for|this equation) gives\b", re.IGNORECASE),
@@ -53,7 +55,10 @@ def _learning_prompt():
 def analyze_assignment(assignment, context=""):
     data = complete_json(
         _learning_prompt()
-        + " Identify what to learn, but do not solve the assignment.",
+        + " Identify what to learn, but do not solve the assignment. Create a short, ordered "
+        "sequence of one to six meaningful checkpoints; put prerequisite understanding before "
+        "advanced reasoning and do not split every arithmetic operation into its own step. "
+        "Each practice prompt must test the step objective, not request the assignment's final answer.",
         json.dumps(
             {
                 "task": "Analyze the assignment for learning needs.",
@@ -62,6 +67,22 @@ def analyze_assignment(assignment, context=""):
                     "concepts": ["string"],
                     "prerequisites": ["string"],
                     "learning_path": ["ordered string steps"],
+                    "steps": [
+                        {
+                            "title": "short student-facing title",
+                            "objective": "one specific learning objective",
+                            "instructions": "brief task instructions without solving the assignment",
+                            "prerequisite_concepts": ["concept names"],
+                            "practice_prompt": "a focused practice checkpoint",
+                            "validation_criteria": "observable reasoning needed to demonstrate this objective",
+                            "hints": [
+                                "conceptual reminder",
+                                "relevant definition or property",
+                                "guiding question about the next move",
+                                "specific partial hint without giving the answer",
+                            ],
+                        }
+                    ],
                 },
                 "assignment": assignment,
                 "context": context,
@@ -72,11 +93,61 @@ def analyze_assignment(assignment, context=""):
     concepts = _string_list(data, "concepts", 8)
     prerequisites = _string_list(data, "prerequisites", 8)
     learning_path = _string_list(data, "learning_path", 8)
-    if not concepts or not learning_path:
-        raise ProviderError("The AI provider returned an incomplete response.", 502)
-    if contains_solution_disclosure(
-        summary, *concepts, *prerequisites, *learning_path
+    raw_steps = data.get("steps")
+    if (
+        not concepts
+        or not learning_path
+        or not isinstance(raw_steps, list)
+        or not 1 <= len(raw_steps) <= MAX_LEARNING_STEPS
     ):
+        raise ProviderError("The AI provider returned an incomplete response.", 502)
+    steps = []
+    used_ids = set()
+    all_step_text = [summary, *concepts, *prerequisites, *learning_path]
+    for index, raw_step in enumerate(raw_steps):
+        if not isinstance(raw_step, dict):
+            raise ProviderError("The AI provider returned an invalid learning step.", 502)
+        title = _required_string(raw_step, "title", 120)
+        objective = _required_string(raw_step, "objective", 400)
+        instructions = _required_string(raw_step, "instructions", 800)
+        practice_prompt = _required_string(raw_step, "practice_prompt", 500)
+        validation_criteria = _required_string(raw_step, "validation_criteria", 800)
+        step_concepts = _string_list(raw_step, "prerequisite_concepts", 5)
+        hints = _string_list(raw_step, "hints", 4)
+        if len(hints) != 4:
+            raise ProviderError("The AI provider returned incomplete step hints.", 502)
+        identifier = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")[:36] or "learning-step"
+        identifier = f"{index + 1}-{identifier}"
+        if identifier in used_ids:
+            suffix = hashlib.sha1(f"{index}:{title}".encode("utf-8")).hexdigest()[:6]
+            identifier = f"{identifier}-{suffix}"
+        used_ids.add(identifier)
+        step_text = [
+            title,
+            objective,
+            instructions,
+            practice_prompt,
+            validation_criteria,
+            *step_concepts,
+            *hints,
+        ]
+        all_step_text.extend(step_text)
+        steps.append(
+            {
+                "id": identifier,
+                "title": title,
+                "objective": objective,
+                "instructions": instructions,
+                "prerequisite_concepts": step_concepts,
+                "practice_prompt": practice_prompt,
+                "validation_criteria": validation_criteria,
+                "hints": hints,
+                "status": "available" if index == 0 else "locked",
+                "attempts": [],
+                "hint_level": 0,
+            }
+        )
+    if contains_solution_disclosure(*all_step_text):
         raise ProviderError(
             "The AI response went beyond learning guidance. Please retry the analysis.", 502
         )
@@ -85,6 +156,80 @@ def analyze_assignment(assignment, context=""):
         "concepts": concepts,
         "prerequisites": prerequisites,
         "learning_path": learning_path,
+        "steps": steps,
+    }
+
+
+def validate_learning_step(assignment, step, attempt):
+    data = complete_json(
+        _learning_prompt()
+        + " Assess only the current step and criteria. Do not solve the overall assignment. "
+        "Be conservative: mark completed only when the attempt explicitly demonstrates every "
+        "criterion. Otherwise return needs_revision. Do not use a completion flag as a substitute "
+        "for evidence in correct_parts. Return exactly the requested JSON fields.",
+        json.dumps(
+            {
+                "task": "Evaluate the student's current learning checkpoint.",
+                "required_shape": {
+                    "status": "completed or needs_revision",
+                    "correct_parts": ["specific reasoning evidenced by the attempt"],
+                    "issues": ["specific gap, error, or missing justification"],
+                    "feedback": "brief targeted explanation",
+                    "next_prompt": "one actionable next step or an invitation to continue",
+                    "hint_available": "boolean",
+                    "step_completed": "boolean",
+                },
+                "assignment": assignment,
+                "current_step": {
+                    "title": step["title"],
+                    "objective": step["objective"],
+                    "instructions": step["instructions"],
+                    "practice_prompt": step["practice_prompt"],
+                    "validation_criteria": step["validation_criteria"],
+                },
+                "student_attempt": attempt,
+            },
+        ),
+    )
+    status = data.get("status")
+    if status not in {"completed", "needs_revision"}:
+        raise ProviderError("The AI provider returned an invalid validation status.", 502)
+    correct_parts = _string_list(data, "correct_parts", 5)
+    issues = _string_list(data, "issues", 5)
+    feedback = _required_string(data, "feedback", 1000)
+    next_prompt = _required_string(data, "next_prompt", 500)
+    hint_available = data.get("hint_available")
+    step_completed = data.get("step_completed")
+    if not isinstance(hint_available, bool) or not isinstance(step_completed, bool):
+        raise ProviderError("The AI provider returned invalid validation flags.", 502)
+
+    complete = (
+        status == "completed"
+        and step_completed
+        and bool(correct_parts)
+        and not issues
+    )
+    if contains_solution_disclosure(feedback, next_prompt, *correct_parts, *issues):
+        complete = False
+        feedback = (
+            "I should keep the focus on your reasoning rather than reveal an answer. "
+            "Show how your attempt meets the stated learning objective."
+        )
+        next_prompt = "Which part of the step's validation criteria can you justify next?"
+    if not complete and status == "completed":
+        status = "needs_revision"
+        step_completed = False
+        if not issues:
+            issues = ["The evidence does not yet demonstrate all completion criteria."]
+
+    return {
+        "status": "completed" if complete else "needs_revision",
+        "correct_parts": correct_parts,
+        "issues": issues,
+        "feedback": feedback,
+        "next_prompt": next_prompt,
+        "hint_available": hint_available,
+        "step_completed": complete,
     }
 
 
