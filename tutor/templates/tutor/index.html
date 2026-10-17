@@ -17,10 +17,13 @@
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/" aria-label="Unstuck home">
-      <span class="brand-mark" aria-hidden="true">u</span>
-      <span>unstuck<span class="brand-period">.</span></span>
-    </a>
+    <form class="brand-form" method="post" action="{% url 'reset_learning_session' %}">
+      {% csrf_token %}
+      <button class="brand" type="submit" aria-label="Unstuck home">
+        <span class="brand-mark" aria-hidden="true">u</span>
+        <span>unstuck<span class="brand-period">.</span></span>
+      </button>
+    </form>
     <div id="header-assignment" class="header-assignment" hidden></div>
     <div id="overall-progress" class="overall-progress" hidden>
       <span id="progress-label">0 of 0 steps</span>

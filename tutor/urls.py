@@ -5,6 +5,7 @@ from . import views
 
 urlpatterns = [
     path("", views.index, name="index"),
+    path("api/learning/reset/", views.reset_learning_session, name="reset_learning_session"),
     path("api/assignments/analyze/", views.analyze_assignment, name="analyze_assignment"),
     path("api/learning/session/", views.learning_session, name="learning_session"),
     path("api/learning/validate/", views.validate_step, name="validate_step"),

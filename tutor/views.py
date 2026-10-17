@@ -1,7 +1,7 @@
 import json
 
 from django.http import JsonResponse
-from django.shortcuts import render
+from django.shortcuts import redirect, render
 from django.views.decorators.http import require_GET, require_POST
 
 from .services.nebius import ProviderError
@@ -31,6 +31,13 @@ class RequestValidationError(Exception):
 @require_GET
 def index(request):
     return render(request, "tutor/index.html")
+
+
+@require_POST
+def reset_learning_session(request):
+    request.session.pop("learning_session", None)
+    request.session.pop("unstuck", None)
+    return redirect("index")
 
 
 def _read_json(request):

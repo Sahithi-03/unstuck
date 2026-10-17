@@ -97,6 +97,21 @@ class UnstuckViewsTests(TestCase):
         self.assertContains(response, "math-field")
         self.assertContains(response, "csrfmiddlewaretoken")
 
+    def test_logo_reset_clears_learning_and_tutor_sessions(self):
+        self.seed_learning_session()
+        session = self.client.session
+        session["unstuck"] = {"assignment": "A prior tutor conversation", "messages": []}
+        session.save()
+
+        response = self.client.post("/api/learning/reset/", **self.headers)
+
+        self.assertRedirects(response, "/")
+        self.assertNotIn("learning_session", self.client.session)
+        self.assertNotIn("unstuck", self.client.session)
+        landing_page = self.client.get("/")
+        self.assertEqual(landing_page.status_code, 200)
+        self.assertContains(landing_page, "Let's get you")
+
     def test_analysis_rejects_empty_assignment(self):
         response = self.post("/api/assignments/analyze/", {"assignment": "  "})
         self.assertEqual(response.status_code, 400)

@@ -40,7 +40,8 @@ button:focus-visible, a:focus-visible, textarea:focus-visible, math-field:focus-
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, .96);
 }
-.brand { display: inline-flex; align-items: center; gap: 9px; color: var(--ink); text-decoration: none; font: 800 20px Manrope, sans-serif; letter-spacing: -.7px; }
+.brand-form { margin: 0; }
+.brand { display: inline-flex; align-items: center; gap: 9px; padding: 0; border: 0; background: none; color: var(--ink); text-decoration: none; font: 800 20px Manrope, sans-serif; letter-spacing: -.7px; cursor: pointer; }
 .brand-mark { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 9px; background: var(--green); color: white; font: 800 18px Manrope, sans-serif; }
 .brand-period, #setup-title span { color: var(--green); }
 .header-assignment { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
