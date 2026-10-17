@@ -18,6 +18,7 @@
   let feedbackResult = null;
   let submissionPending = false;
   let resourceRequestId = 0;
+  let resourceQuestionText = "";
 
   function csrfToken() {
     return document.querySelector("[name=csrfmiddlewaretoken]").value;
@@ -53,7 +54,7 @@
 
   function mathText(parent, text) {
     const source = String(text || "");
-    const pattern = /\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^$\n]+?)\$/g;
+    const pattern = /\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g;
     let offset = 0;
     let match;
     while ((match = pattern.exec(source)) !== null) {
@@ -61,11 +62,14 @@
       if (window.katex) {
         const rendered = document.createElement("span");
         try {
-          rendered.innerHTML = window.katex.renderToString(match[1] || match[2] || match[3], {
-            throwOnError: false,
-            trust: false,
-            strict: "ignore",
-          });
+          rendered.innerHTML = window.katex.renderToString(
+            match[1] || match[2] || match[3] || match[4],
+            {
+              throwOnError: false,
+              trust: false,
+              strict: "ignore",
+            },
+          );
           parent.appendChild(rendered);
         } catch {
           parent.appendChild(document.createTextNode(match[0]));
@@ -76,6 +80,11 @@
       offset = pattern.lastIndex;
     }
     parent.appendChild(document.createTextNode(source.slice(offset)));
+  }
+
+  function renderMathText(element, text) {
+    clear(element);
+    mathText(element, text);
   }
 
   function saveDraft() {
@@ -198,7 +207,8 @@
     const next = document.createElement("p");
     const label = document.createElement("strong");
     label.textContent = "Next: ";
-    next.append(label, document.createTextNode(result.next_prompt));
+    next.appendChild(label);
+    mathText(next, result.next_prompt);
     feedbackArea.appendChild(next);
     feedbackArea.hidden = false;
     document.querySelector("#continue-step").disabled =
@@ -216,11 +226,13 @@
       `STEP ${learningSession.steps.findIndex((item) => item.id === step.id) + 1} OF ${learningSession.steps.length}`;
     renderStatus(step);
     document.querySelector("#step-title").textContent = step.title;
-    document.querySelector("#step-objective").textContent = step.objective;
-    document.querySelector("#step-instructions").textContent = step.instructions;
-    document.querySelector("#practice-prompt").textContent = step.practice_prompt;
-    document.querySelector("#validation-criteria").textContent =
-      `A complete response should: ${step.validation_criteria}`;
+    renderMathText(document.querySelector("#step-objective"), step.objective);
+    renderMathText(document.querySelector("#step-instructions"), step.instructions);
+    renderMathText(document.querySelector("#practice-prompt"), step.practice_prompt);
+    const criteria = document.querySelector("#validation-criteria");
+    clear(criteria);
+    criteria.appendChild(document.createTextNode("A complete response should: "));
+    mathText(criteria, step.validation_criteria);
 
     const concepts = step.prerequisite_concepts.length
       ? step.prerequisite_concepts
@@ -281,10 +293,12 @@
     selectedConcept = concept;
     resourcePanel.hidden = false;
     document.querySelector("#resource-concept-title").textContent = concept;
-    document.querySelector("#resource-why").textContent =
-      `This idea supports “${activeStep.title}” and may help with: ${activeStep.objective}`;
-    document.querySelector("#resource-question").textContent =
-      `In your own words, what does ${concept} help you understand?`;
+    renderMathText(
+      document.querySelector("#resource-why"),
+      `This idea supports “${activeStep.title}” and may help with: ${activeStep.objective}`,
+    );
+    resourceQuestionText = `In your own words, what does ${concept} help you understand?`;
+    renderMathText(document.querySelector("#resource-question"), resourceQuestionText);
     document.querySelector("#resource-answer").value = "";
     const list = document.querySelector("#resource-list");
     clear(list);
@@ -328,10 +342,10 @@
         source.textContent = resource.source;
         const relevance = document.createElement("p");
         relevance.className = "resource-relevance";
-        relevance.textContent = resource.relevance;
+        mathText(relevance, resource.relevance);
         const objective = document.createElement("p");
         objective.className = "resource-relevance";
-        objective.textContent = `Learn: ${resource.learning_objective}`;
+        mathText(objective, `Learn: ${resource.learning_objective}`);
         const linkState = document.createElement("p");
         linkState.className = "resource-link-status";
         linkState.textContent = resource.link_status === "accessible"
@@ -343,7 +357,7 @@
         if (resource.suggested_section) {
           const section = document.createElement("p");
           section.className = "resource-relevance";
-          section.textContent = `Suggested section: ${resource.suggested_section}`;
+          mathText(section, `Suggested section: ${resource.suggested_section}`);
           card.appendChild(section);
         }
         list.appendChild(card);
@@ -402,7 +416,7 @@
 
   document.querySelector("#discuss-resource").addEventListener("click", () => {
     const answer = document.querySelector("#resource-answer").value.trim();
-    const question = `I am reviewing ${selectedConcept}. ${document.querySelector("#resource-question").textContent}${answer ? ` My answer: ${answer}` : ""}`;
+    const question = `I am reviewing ${selectedConcept}. ${resourceQuestionText}${answer ? ` My answer: ${answer}` : ""}`;
     textAttempt.value = textAttempt.value
       ? `${textAttempt.value}\n\n${question}`
       : question;
