@@ -49,7 +49,7 @@ Open <http://127.0.0.1:8000/>.
 
 Without the Nebius key or model, AI endpoints return a clear configuration error. Without a resource provider, the app explicitly reports that resource discovery is unavailable; it does not invent links.
 
-`.env.example` is a template and is not loaded by Django. Put your values in a workspace-root `.env` file (copy `.env.example` to `.env` first), then restart `runserver` so the process loads the updated environment.
+`.env.example` is a template and is not loaded by Django. Put your values in a workspace-root `.env` file (copy `.env.example` to `.env` first), then restart `runserver` so the process loads the updated environment. To enable Tavily, set `RESOURCE_SEARCH_PROVIDER=tavily` and set `TAVILY_API_KEY` in `.env`; the default `none` disables live search even when a key is present.
 
 ## Learning flow and API
 
