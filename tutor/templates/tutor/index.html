@@ -1,0 +1,128 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A mathematics learning companion that helps you find your next step.">
+  <title>Unstuck — think it through</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css" crossorigin="anonymous">
+  <link rel="stylesheet" href="{% static 'tutor/style.css' %}">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
+  <script type="module" src="https://cdn.jsdelivr.net/npm/mathlive@0.101.1/dist/mathlive.min.mjs"></script>
+  <script defer src="{% static 'tutor/app.js' %}"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Unstuck home">
+      <span class="brand-mark" aria-hidden="true">u</span>
+      <span>unstuck<span class="brand-period">.</span></span>
+    </a>
+    <span class="topbar-note">Your thinking, one step at a time</span>
+  </header>
+
+  <main class="page-shell">
+    <section class="hero" aria-labelledby="page-title">
+      <div class="eyebrow"><span class="eyebrow-dot"></span> YOUR PERSONAL MATHS STUDY SPACE</div>
+      <h1 id="page-title">Let's get you <span>unstuck.</span></h1>
+      <p class="hero-copy">Bring a problem you're working on. We'll find the ideas behind it, then take it one step at a time.</p>
+    </section>
+
+    <div class="progress" aria-label="Learning progress">
+      <div class="progress-step is-active" data-stage="start"><span>1</span><b>Understand</b></div>
+      <i aria-hidden="true"></i>
+      <div class="progress-step" data-stage="exploring"><span>2</span><b>Explore</b></div>
+      <i aria-hidden="true"></i>
+      <div class="progress-step" data-stage="practicing"><span>3</span><b>Practice</b></div>
+      <i aria-hidden="true"></i>
+      <div class="progress-step" data-stage="reviewing"><span>4</span><b>Reflect</b></div>
+    </div>
+
+    <section class="panel assignment-panel" aria-labelledby="assignment-title">
+      <div class="panel-heading">
+        <div class="section-icon assignment-icon" aria-hidden="true">01</div>
+        <div>
+          <p class="section-kicker">START WITH THE QUESTION</p>
+          <h2 id="assignment-title">What are you working on?</h2>
+        </div>
+      </div>
+      <label class="sr-only" for="assignment">Paste your mathematics assignment</label>
+      <textarea id="assignment" maxlength="6000" placeholder="Paste a problem or assignment here…&#10;&#10;For example: Find the maximum area of a rectangle with a fixed perimeter of 24 cm." required></textarea>
+      <div class="input-footer">
+        <span class="input-hint">It's okay if it feels confusing. That's where we start.</span>
+        <button id="analyze-button" class="button button-primary" type="button">
+          <span>Find my learning path</span> <span aria-hidden="true">→</span>
+        </button>
+      </div>
+      <p id="assignment-error" class="inline-error" role="alert" hidden></p>
+    </section>
+
+    <section id="learning-section" class="panel learning-panel" aria-labelledby="learning-title" hidden>
+      <div class="panel-heading">
+        <div class="section-icon learning-icon" aria-hidden="true">02</div>
+        <div>
+          <p class="section-kicker">YOUR STARTING POINT</p>
+          <h2 id="learning-title">A path through the ideas</h2>
+        </div>
+      </div>
+      <p id="problem-summary" class="summary"></p>
+      <div class="learning-columns">
+        <div>
+          <h3>Concepts in this problem</h3>
+          <ul id="concept-list" class="concept-list"></ul>
+        </div>
+        <div>
+          <h3>Useful prerequisites</h3>
+          <ul id="prerequisite-list" class="concept-list"></ul>
+        </div>
+      </div>
+      <div class="path-wrap">
+        <h3>Your learning path</h3>
+        <ol id="path-list" class="path-list"></ol>
+      </div>
+      <div class="resources-wrap">
+        <div class="resource-heading">
+          <h3>Resources to explore</h3>
+          <span class="resource-caption">Up to 3 hand-picked starting points</span>
+        </div>
+        <div id="resource-list" class="resource-list"></div>
+      </div>
+    </section>
+
+    <section id="discussion-section" class="panel discussion-panel" aria-labelledby="discussion-title" hidden>
+      <div class="panel-heading">
+        <div class="section-icon discussion-icon" aria-hidden="true">03</div>
+        <div>
+          <p class="section-kicker">THINK IT THROUGH TOGETHER</p>
+          <h2 id="discussion-title">Where would you like to start?</h2>
+        </div>
+      </div>
+      <div class="mode-row" role="group" aria-label="Choose how the tutor should help">
+        <button class="mode-button is-selected" data-mode="hint" type="button" aria-pressed="true">Give me a hint</button>
+        <button class="mode-button" data-mode="explain" type="button" aria-pressed="false">Explain a concept</button>
+        <button class="mode-button" data-mode="check_work" type="button" aria-pressed="false">Check my thinking</button>
+      </div>
+      <div class="working-box">
+        <label for="working">Your working <span>(optional for hints)</span></label>
+        <math-field id="working" virtual-keyboard-mode="manual" aria-label="Enter mathematical working" placeholder="Type maths here, or use the keyboard"></math-field>
+      </div>
+      <div class="message-box">
+        <label class="sr-only" for="student-message">Ask a question or describe where you are stuck</label>
+        <textarea id="student-message" maxlength="3000" rows="2" placeholder="What have you tried, or what feels unclear?"></textarea>
+        <button id="send-button" class="button button-primary" type="button" aria-label="Send question">Ask for guidance <span aria-hidden="true">↑</span></button>
+      </div>
+      <div class="discussion-actions">
+        <span>Hints build gradually — you'll do the solving.</span>
+        <button id="check-button" class="text-button" type="button">Review my working</button>
+      </div>
+      <p id="discussion-error" class="inline-error" role="alert" hidden></p>
+      <div id="response-area" class="response-area" aria-live="polite"></div>
+    </section>
+    <footer class="page-footer">A good next step is worth more than a quick answer.</footer>
+  </main>
+  <form class="csrf-holder" aria-hidden="true">{% csrf_token %}</form>
+</body>
+</html>
