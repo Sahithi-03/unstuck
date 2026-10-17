@@ -54,16 +54,21 @@
 
   function mathText(parent, text) {
     const source = String(text || "");
-    const pattern = /\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$/g;
+    const pattern = /\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$|\|\|([^|\n]{1,80})\|\|_(infinity|inf|[0-9]+)|\\\|([^\\\n]{1,80})\\\|_(infinity|inf|[0-9]+)/g;
     let offset = 0;
     let match;
     while ((match = pattern.exec(source)) !== null) {
       parent.appendChild(document.createTextNode(source.slice(offset, match.index)));
+      const norm = match[5] || match[7];
+      const subscript = match[6] || match[8];
+      const expression = norm
+        ? `\\left\\|${norm.trim()}\\right\\|_{${subscript === "infinity" || subscript === "inf" ? "\\infty" : subscript}}`
+        : match[1] || match[2] || match[3] || match[4];
       if (window.katex) {
         const rendered = document.createElement("span");
         try {
           rendered.innerHTML = window.katex.renderToString(
-            match[1] || match[2] || match[3] || match[4],
+            expression,
             {
               throwOnError: false,
               trust: false,
