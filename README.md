@@ -21,7 +21,7 @@ python -m pip install -r requirements.txt
 python manage.py migrate
 ```
 
-Copy `.env.example` to `.env`. Add a long random `DJANGO_SECRET_KEY`, your `NEBIUS_API_KEY`, and an available `NEBIUS_MODEL`. The default Nebius API base URL is `https://api.studio.nebius.com/v1`.
+Copy `.env.example` to `.env`. Add a long random `DJANGO_SECRET_KEY`, your `NEBIUS_API_KEY`, and an available `NEBIUS_MODEL`. The default Nebius API base URL is `https://api.tokenfactory.nebius.com/v1/`.
 
 Run Django's checks and tests, then start the development server:
 
@@ -45,16 +45,21 @@ Open <http://127.0.0.1:8000/>.
 | `NEBIUS_MODEL` | For AI features | Model ID enabled for your Nebius account. |
 | `RESOURCE_SEARCH_PROVIDER` | No | `none` (default) or `tavily`. |
 | `TAVILY_API_KEY` | For Tavily | Enables the optional live educational resource search. |
+| `RESOURCE_PREFERRED_DOMAINS` | No | Comma-separated preferred educational domains. Defaults to OpenStax, MIT OpenCourseWare, Khan Academy, and LibreTexts math. |
 
 Without the Nebius key or model, AI endpoints return a clear configuration error. Without a resource provider, the app explicitly reports that resource discovery is unavailable; it does not invent links.
+
+`.env.example` is a template and is not loaded by Django. Put your values in a workspace-root `.env` file (copy `.env.example` to `.env` first), then restart `runserver` so the process loads the updated environment.
 
 ## Learning flow and API
 
 - `GET /` serves the responsive interface and MathLive/KaTeX assets.
-- `POST /api/assignments/analyze/` identifies concepts, prerequisites, an ordered learning path, and search queries.
-- `POST /api/resources/search/` returns up to three real provider results, or a clear unavailable status.
+- `POST /api/assignments/analyze/` identifies concepts, prerequisites, and an ordered learning path.
+- `POST /api/resources/search/` accepts prerequisite `concepts`, optionally `feedback` (`too_difficult` or `not_helpful`) and `exclude_urls`, then returns up to three concept-focused provider results or a clear unavailable status.
 - `POST /api/tutor/chat/` supports `hint`, `explain`, and `check_work` modes.
 - `POST /api/tutor/check/` gives cautious feedback on the student's current mathematical working.
+
+Resource search makes one focused query per prerequisite concept and asks Tavily to prefer configured educational domains. Cards include source snippets, an objective, and a conceptual checkpoint. A lightweight HEAD request reports link reachability when possible; it does not assess source quality or mathematical accuracy. Feedback buttons refine the next search query and exclude already-shown links. No-provider and provider-failure states do not fabricate resources.
 
 The browser sends same-origin JSON requests with Django CSRF tokens. Assignment and recent conversation context, hint level, and learning stage are kept in the Django session. SQLite is configured as the database; this MVP does not need user accounts or custom database models.
 
@@ -62,8 +67,9 @@ The browser sends same-origin JSON requests with Django CSRF tokens. Assignment 
 
 1. Start Django with the configured environment variables and open the home page.
 2. Paste a problem and analyze it; verify the summary, concepts, prerequisites, and ordered path appear.
-3. With resource search disabled, verify the interface says discovery is not configured rather than showing fabricated links. Enable Tavily to test real resource cards.
-4. Enter a question and a line of working, request a hint, then ask another question; verify the hint level and conversation continue.
-5. Switch to “Explain a concept” and “Check my thinking”; confirm the responses are mode-appropriate and include uncertainty in working checks.
-6. Try empty input and a deliberately invalid request; verify readable errors appear and the page remains usable.
-7. Inspect mathematical expressions in responses and try the MathLive equation editor.
+3. With resource search disabled, verify the interface says discovery is not configured rather than showing fabricated links. Enable Tavily to test concept-focused resource cards.
+4. Try each resource checkpoint, discuss an answer with the tutor, and mark a resource too difficult or unhelpful to request an alternative.
+5. Enter a question and a line of working, request a hint, then ask another question; verify the hint level and conversation continue.
+6. Switch to “Explain a concept” and “Check my thinking”; confirm the responses are mode-appropriate and include uncertainty in working checks.
+7. Try empty input and a deliberately invalid request; verify readable errors appear and the page remains usable.
+8. Inspect mathematical expressions in responses and try the MathLive equation editor.

@@ -83,7 +83,6 @@ def analyze_assignment(request):
         "learning_stage": "exploring",
         "hint_level": 0,
         "history": [],
-        "search_queries": result["search_queries"],
     }
     return JsonResponse(result)
 
@@ -92,13 +91,31 @@ def analyze_assignment(request):
 def search_resources(request):
     try:
         payload = _read_json(request)
-        queries = payload.get("queries")
-        if not isinstance(queries, list) or not 1 <= len(queries) <= 5:
-            raise RequestValidationError("queries must be a list containing 1 to 5 search terms.")
-        if any(not isinstance(query, str) or not query.strip() or len(query) > 300 for query in queries):
-            raise RequestValidationError("Each search term must be text of at most 300 characters.")
-        concept = _text(payload, "concept", max_length=200)
-        result = discover_resources([query.strip() for query in queries], concept)
+        concepts = payload.get("concepts")
+        if concepts is None:
+            concepts = payload.get("queries")
+        if not isinstance(concepts, list) or not 1 <= len(concepts) <= 5:
+            raise RequestValidationError("concepts must be a list containing 1 to 5 concepts.")
+        if any(
+            not isinstance(concept, str) or not concept.strip() or len(concept) > 200
+            for concept in concepts
+        ):
+            raise RequestValidationError("Each concept must be text of at most 200 characters.")
+        feedback = payload.get("feedback")
+        if feedback not in (None, "", "too_difficult", "not_helpful"):
+            raise RequestValidationError("feedback must be too_difficult or not_helpful.")
+        exclude_urls = payload.get("exclude_urls", [])
+        if (
+            not isinstance(exclude_urls, list)
+            or len(exclude_urls) > 10
+            or any(not isinstance(url, str) or len(url) > 2048 for url in exclude_urls)
+        ):
+            raise RequestValidationError("exclude_urls must contain at most 10 URL strings.")
+        result = discover_resources(
+            [concept.strip() for concept in concepts],
+            feedback=feedback or None,
+            exclude_urls=exclude_urls,
+        )
     except RequestValidationError as exc:
         return _error(str(exc), 400)
     except ProviderError as exc:
@@ -128,7 +145,6 @@ def chat(request):
                 "learning_stage": "discussing",
                 "hint_level": 0,
                 "history": [],
-                "search_queries": [],
             }
         else:
             context = context or state.get("context", "")

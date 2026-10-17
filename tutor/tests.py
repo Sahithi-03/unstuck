@@ -1,4 +1,5 @@
 import json
+import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -6,6 +7,7 @@ from django.test import Client, TestCase
 from openai import APIConnectionError
 
 from .services.nebius import ProviderError, complete_json
+from .services import resources as resource_service
 from .services.tutor import contains_solution_disclosure
 
 
@@ -129,6 +131,26 @@ class UnstuckViewsTests(TestCase):
         self.assertEqual(response.json()["resources"], [])
         self.assertIn("not configured", response.json()["message"])
 
+    @patch("tutor.services.resources._tavily_search", return_value=[])
+    def test_resource_endpoint_returns_empty_search_without_fabricating_cards(self, search):
+        with patch.dict(os.environ, {"RESOURCE_SEARCH_PROVIDER": "tavily", "TAVILY_API_KEY": "test"}):
+            response = self.post(
+                "/api/resources/search/",
+                {"concepts": ["quadratic equations"]},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["available"])
+        self.assertEqual(response.json()["resources"], [])
+        self.assertIn("No matching resources", response.json()["message"])
+        search.assert_called_once()
+
+    def test_resource_endpoint_validates_feedback(self):
+        response = self.post(
+            "/api/resources/search/",
+            {"concepts": ["fractions"], "feedback": "show_solution"},
+        )
+        self.assertEqual(response.status_code, 400)
+
     @patch(
         "tutor.services.tutor.complete_json",
         return_value={
@@ -210,3 +232,193 @@ class NebiusServiceTests(TestCase):
         )
         with self.assertRaisesRegex(ProviderError, "could not complete"):
             complete_json("system", "user")
+
+
+class ResourceSearchTests(TestCase):
+    @patch("tutor.services.resources._tavily_search")
+    def test_missing_provider_configuration_is_honest_and_skips_external_search(self, search):
+        with patch.dict(os.environ, {"RESOURCE_SEARCH_PROVIDER": "none"}, clear=False):
+            result = resource_service.search_resources(["linear equations"])
+        self.assertFalse(result["available"])
+        self.assertEqual(result["resources"], [])
+        self.assertIn("not configured", result["message"])
+        search.assert_not_called()
+
+    @patch("tutor.services.resources._tavily_search")
+    def test_missing_tavily_key_is_honest_and_skips_external_search(self, search):
+        env = {"RESOURCE_SEARCH_PROVIDER": "tavily"}
+        with patch.dict(os.environ, env, clear=False):
+            os.environ.pop("TAVILY_API_KEY", None)
+            result = resource_service.search_resources(["linear equations"])
+        self.assertFalse(result["available"])
+        self.assertIn("TAVILY_API_KEY is missing", result["message"])
+        search.assert_not_called()
+
+    @patch("tutor.services.resources._tavily_search", return_value=[])
+    def test_empty_provider_results_return_empty_resources(self, _search):
+        with patch.dict(os.environ, {"RESOURCE_SEARCH_PROVIDER": "tavily", "TAVILY_API_KEY": "test"}):
+            result = resource_service.search_resources(["linear equations"])
+        self.assertTrue(result["available"])
+        self.assertEqual(result["resources"], [])
+        self.assertIn("No matching resources", result["message"])
+
+    @patch(
+        "tutor.services.resources.check_accessibility",
+        return_value={
+            "link_status": "accessible",
+            "link_check_detail": "Link check received HTTP 200; this does not assess educational or mathematical quality.",
+        },
+    )
+    @patch("tutor.services.resources._tavily_search")
+    def test_concept_queries_reject_invalid_urls_deduplicate_and_prefer_sources(
+        self, search, _accessibility
+    ):
+        search.side_effect = [
+            [
+                {"title": "Bad URL", "url": "javascript:alert(1)"},
+                {
+                    "title": "OpenStax algebra",
+                    "url": "https://openstax.org/books/algebra/",
+                    "content": "An introduction to equations.",
+                    "section": "Linear equations",
+                },
+            ],
+            [
+                {"title": "Duplicate", "url": "https://openstax.org/books/algebra"},
+                {
+                    "title": "Khan Academy fractions",
+                    "url": "https://www.khanacademy.org/math/fractions",
+                    "content": "Understand fraction operations.",
+                },
+            ],
+        ]
+        with patch.dict(
+            os.environ,
+            {
+                "RESOURCE_SEARCH_PROVIDER": "tavily",
+                "TAVILY_API_KEY": "test",
+                "RESOURCE_PREFERRED_DOMAINS": "openstax.org,khanacademy.org",
+            },
+        ):
+            result = resource_service.search_resources(
+                ["linear equations", "fractions"],
+                feedback="too_difficult",
+            )
+
+        self.assertEqual(len(result["resources"]), 2)
+        self.assertEqual(result["resources"][0]["source"], "OpenStax")
+        self.assertEqual(result["resources"][0]["concept"], "linear equations")
+        self.assertEqual(result["resources"][0]["suggested_section"], "Linear equations")
+        self.assertEqual(result["resources"][1]["source"], "Khan Academy")
+        self.assertTrue(all(item["url"].startswith("https://") for item in result["resources"]))
+        first_query, first_domains, _ = search.call_args_list[0].args
+        second_query, second_domains, _ = search.call_args_list[1].args
+        self.assertIn("linear equations", first_query)
+        self.assertIn("beginner-friendly", first_query)
+        self.assertIn("fractions", second_query)
+        self.assertEqual(first_domains, ["openstax.org", "khanacademy.org"])
+        self.assertEqual(second_domains, first_domains)
+
+    @patch("tutor.services.resources._tavily_search", return_value=[{"title": "bad", "url": "https://:bad"}])
+    def test_malformed_and_invalid_urls_are_rejected(self, _search):
+        with patch.dict(os.environ, {"RESOURCE_SEARCH_PROVIDER": "tavily", "TAVILY_API_KEY": "test"}):
+            result = resource_service.search_resources(["geometry"])
+        self.assertTrue(result["available"])
+        self.assertEqual(result["resources"], [])
+
+    @patch(
+        "tutor.services.resources._tavily_search",
+        side_effect=ProviderError("Resource search is temporarily unavailable."),
+    )
+    def test_provider_failure_returns_unavailable_state(self, _search):
+        with patch.dict(os.environ, {"RESOURCE_SEARCH_PROVIDER": "tavily", "TAVILY_API_KEY": "test"}):
+            result = resource_service.search_resources(["geometry"])
+        self.assertFalse(result["available"])
+        self.assertEqual(result["resources"], [])
+        self.assertIn("temporarily unavailable", result["message"])
+
+    @patch(
+        "tutor.services.resources.check_accessibility",
+        return_value={
+            "link_status": "not_checked",
+            "link_check_detail": "Public host could not be confirmed.",
+        },
+    )
+    @patch(
+        "tutor.services.resources._tavily_search",
+        return_value=[
+            {
+                "title": "University notes",
+                "url": "https://math.example.edu/notes",
+                "content": "Notes on derivatives.",
+            }
+        ],
+    )
+    def test_valid_resource_has_checkpoint_and_no_unearned_verification_claim(
+        self, _search, _accessibility
+    ):
+        with patch.dict(os.environ, {"RESOURCE_SEARCH_PROVIDER": "tavily", "TAVILY_API_KEY": "test"}):
+            result = resource_service.search_resources(["derivatives"])
+        resource = result["resources"][0]
+        self.assertEqual(
+            set(resource),
+            {
+                "title",
+                "url",
+                "source",
+                "concept",
+                "relevance",
+                "suggested_section",
+                "learning_objective",
+                "checkpoint_question",
+                "link_status",
+                "link_check_detail",
+            },
+        )
+        self.assertIn("derivatives", resource["learning_objective"])
+        self.assertIn("derivatives", resource["checkpoint_question"])
+        self.assertEqual(resource["link_status"], "not_checked")
+        self.assertNotIn("verified", resource)
+        self.assertNotIn("verified", resource["link_check_detail"].lower())
+
+    @patch("tutor.services.resources._tavily_search", return_value=[])
+    def test_excluded_urls_are_not_returned_on_follow_up(self, search):
+        with patch.dict(os.environ, {"RESOURCE_SEARCH_PROVIDER": "tavily", "TAVILY_API_KEY": "test"}):
+            result = resource_service.search_resources(
+                ["geometry"],
+                feedback="not_helpful",
+                exclude_urls=["https://openstax.org/previous"],
+            )
+        query = search.call_args.args[0]
+        self.assertIn("alternative explanation", query)
+
+    @patch(
+        "tutor.services.resources.check_accessibility",
+        return_value={
+            "link_status": "accessible",
+            "link_check_detail": "Link check received HTTP 200; this does not assess educational or mathematical quality.",
+        },
+    )
+    @patch("tutor.services.resources._tavily_search")
+    def test_search_returns_at_most_three_resources(self, search, _accessibility):
+        search.side_effect = [
+            [{"title": f"Lesson {index}", "url": f"https://math.example.edu/{index}"}]
+            for index in range(5)
+        ]
+        with patch.dict(os.environ, {"RESOURCE_SEARCH_PROVIDER": "tavily", "TAVILY_API_KEY": "test"}):
+            result = resource_service.search_resources(
+                ["algebra", "geometry", "fractions", "calculus", "statistics"]
+            )
+        self.assertEqual(len(result["resources"]), 3)
+        self.assertEqual(search.call_count, 3)
+
+    @patch("tutor.services.resources._public_host", return_value=True)
+    @patch("tutor.services.resources.build_opener")
+    def test_accessibility_status_only_reports_successful_http_reachability(
+        self, build_opener, _public_host
+    ):
+        build_opener.return_value.open.return_value.__enter__.return_value.status = 204
+        result = resource_service.check_accessibility("https://math.example.edu/notes")
+        self.assertEqual(result["link_status"], "accessible")
+        self.assertIn("HTTP 204", result["link_check_detail"])
+        self.assertIn("does not assess educational or mathematical quality", result["link_check_detail"])

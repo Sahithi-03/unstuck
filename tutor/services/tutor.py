@@ -62,7 +62,6 @@ def analyze_assignment(assignment, context=""):
                     "concepts": ["string"],
                     "prerequisites": ["string"],
                     "learning_path": ["ordered string steps"],
-                    "search_queries": ["useful resource search strings"],
                 },
                 "assignment": assignment,
                 "context": context,
@@ -73,11 +72,10 @@ def analyze_assignment(assignment, context=""):
     concepts = _string_list(data, "concepts", 8)
     prerequisites = _string_list(data, "prerequisites", 8)
     learning_path = _string_list(data, "learning_path", 8)
-    search_queries = _string_list(data, "search_queries", 5)
-    if not concepts or not learning_path or not search_queries:
+    if not concepts or not learning_path:
         raise ProviderError("The AI provider returned an incomplete response.", 502)
     if contains_solution_disclosure(
-        summary, *concepts, *prerequisites, *learning_path, *search_queries
+        summary, *concepts, *prerequisites, *learning_path
     ):
         raise ProviderError(
             "The AI response went beyond learning guidance. Please retry the analysis.", 502
@@ -87,7 +85,6 @@ def analyze_assignment(assignment, context=""):
         "concepts": concepts,
         "prerequisites": prerequisites,
         "learning_path": learning_path,
-        "search_queries": search_queries,
     }
 
 

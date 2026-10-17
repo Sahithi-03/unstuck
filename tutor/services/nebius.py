@@ -4,7 +4,7 @@ import os
 from openai import OpenAI, OpenAIError
 
 
-BASE_URL = "https://api.studio.nebius.com/v1"
+BASE_URL = "https://api.tokenfactory.nebius.com/v1/"
 REQUEST_TIMEOUT_SECONDS = 25
 
 
