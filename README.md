@@ -1,6 +1,6 @@
-# Unstuck
+# Lazyn't
 
-Unstuck is a small Django-based mathematics learning companion. It helps students identify the ideas behind an assignment, find learning resources, and make progress through incremental hints and feedback on their own work.
+Lazyn't is a mathematics learning companion for the student who wants the easy way out but accidentally ends up learning something. Work smarter. Unfortunately, still work. It helps students identify the ideas behind an assignment, find learning resources, and make progress through incremental hints and feedback on their own work.
 
 The tutor is designed not to return a complete solution. Server-side response validation and an answer-disclosure guard provide an additional check, but heuristic safeguards cannot guarantee that a language model will never reveal an answer. Review AI output as part of any classroom deployment.
 

@@ -42,7 +42,7 @@ def contains_solution_disclosure(*values):
 
 def _learning_prompt():
     return (
-        "You are Unstuck, a patient mathematics learning coach. Help students reason, do not "
+        "You are Lazyn't, a patient mathematics learning coach. Help students reason, do not "
         "complete their homework. Never provide a full worked solution, final numeric result, or "
         "submission-ready answer. Give at most one meaningful next step, calibrated to the stated "
         "hint level. Respond to the student's actual attempt. Preserve LaTeX notation. If context "
