@@ -93,7 +93,9 @@ class UnstuckViewsTests(TestCase):
     def test_homepage_renders_interface_and_csrf_token(self):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Let's get you")
+        self.assertContains(response, "<title>Lazyn't")
+        self.assertContains(response, "Lazyn't: ")
+        self.assertContains(response, "Work smarter. Unfortunately, still work.")
         self.assertContains(response, "math-field")
         self.assertContains(response, "csrfmiddlewaretoken")
 
@@ -110,7 +112,7 @@ class UnstuckViewsTests(TestCase):
         self.assertNotIn("unstuck", self.client.session)
         landing_page = self.client.get("/")
         self.assertEqual(landing_page.status_code, 200)
-        self.assertContains(landing_page, "Let's get you")
+        self.assertContains(landing_page, "Lazyn't: ")
 
     def test_analysis_rejects_empty_assignment(self):
         response = self.post("/api/assignments/analyze/", {"assignment": "  "})

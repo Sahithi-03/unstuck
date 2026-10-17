@@ -5,7 +5,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Work through mathematics one verified learning step at a time.">
-  <title>Unstuck — your learning workspace</title>
+  <title>Lazyn't — Work smarter. Unfortunately, still work.</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
@@ -19,9 +19,9 @@
   <header class="topbar">
     <form class="brand-form" method="post" action="{% url 'reset_learning_session' %}">
       {% csrf_token %}
-      <button class="brand" type="submit" aria-label="Unstuck home">
-        <span class="brand-mark" aria-hidden="true">u</span>
-        <span>unstuck<span class="brand-period">.</span></span>
+      <button class="brand" type="submit" aria-label="Lazyn't home">
+        <span class="brand-mark" aria-hidden="true">L</span>
+        <span>Lazyn't<span class="brand-period">.</span></span>
       </button>
     </form>
     <div id="header-assignment" class="header-assignment" hidden></div>
@@ -36,8 +36,8 @@
   <main class="page-shell">
     <section id="setup-panel" class="setup-panel" aria-labelledby="setup-title">
       <p class="eyebrow"><span class="eyebrow-dot"></span> YOUR PERSONAL MATHS STUDY SPACE</p>
-      <h1 id="setup-title">Let's get you <span>unstuck.</span></h1>
-      <p class="hero-copy">Work through a problem one meaningful checkpoint at a time. You do the thinking; we'll help you find your next step.</p>
+      <h1 id="setup-title">Lazyn't: <span>the easy way out.</span></h1>
+      <p class="hero-copy">For the student who wants the easy way out but accidentally ends up learning something. Work smarter. Unfortunately, still work.</p>
       <div class="assignment-card">
         <label for="assignment">What are you working on?</label>
         <textarea id="assignment" maxlength="6000" placeholder="Paste a maths problem or assignment…" required></textarea>

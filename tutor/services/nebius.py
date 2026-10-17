@@ -1,10 +1,10 @@
 import json
 import os
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
-from openai import OpenAI, OpenAIError
 
-
-BASE_URL = "https://api.tokenfactory.nebius.com/v1/"
+BASE_URL = "https://api.tokenfactory.us-north1.nebius.com/v1/"
 REQUEST_TIMEOUT_SECONDS = 25
 
 
@@ -23,26 +23,32 @@ def complete_json(system_prompt, user_prompt):
         raise ProviderError("AI tutoring is not configured. Set NEBIUS_API_KEY and NEBIUS_MODEL.")
 
     try:
-        client = OpenAI(
-            api_key=api_key,
-            base_url=os.getenv("NEBIUS_BASE_URL", BASE_URL),
-            timeout=REQUEST_TIMEOUT_SECONDS,
+        base_url = os.getenv("NEBIUS_BASE_URL", BASE_URL).rstrip("/")
+        request = Request(
+            f"{base_url}/chat/completions",
+            data=json.dumps({
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.3,
+            }).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
         )
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.3,
-        )
-    except OpenAIError as exc:
+        with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+            response_data = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         raise ProviderError("The AI provider could not complete the request. Please try again.") from exc
 
     try:
-        content = response.choices[0].message.content
-    except (AttributeError, IndexError, TypeError) as exc:
+        content = response_data["choices"][0]["message"]["content"]
+    except (AttributeError, IndexError, KeyError, TypeError) as exc:
         raise ProviderError("The AI provider returned an invalid response.", 502) from exc
     if not isinstance(content, str):
         raise ProviderError("The AI provider returned an invalid response.", 502)
