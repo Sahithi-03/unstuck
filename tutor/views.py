@@ -1,10 +1,18 @@
 import json
+import re
+import uuid
 
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.views.decorators.http import require_GET, require_POST
 
 from .services.nebius import ProviderError
+from .services.pdf_extraction import (
+    PdfExtractionError,
+    analyze_pdf,
+    max_page_count,
+    max_upload_bytes,
+)
 from .services.resources import search_resources as discover_resources
 from .services.tutor import (
     MAX_HISTORY_MESSAGES,
@@ -30,13 +38,23 @@ class RequestValidationError(Exception):
 
 @require_GET
 def index(request):
-    return render(request, "tutor/index.html")
+    upload_limit = max_upload_bytes()
+    return render(
+        request,
+        "tutor/index.html",
+        {
+            "pdf_max_upload_bytes": upload_limit,
+            "pdf_max_upload_mb": (upload_limit + 1024 * 1024 - 1) // (1024 * 1024),
+            "pdf_max_pages": max_page_count(),
+        },
+    )
 
 
 @require_POST
 def reset_learning_session(request):
     request.session.pop("learning_session", None)
     request.session.pop("unstuck", None)
+    request.session.pop("pdf_extraction", None)
     return redirect("index")
 
 
@@ -95,6 +113,7 @@ def _learning_state_for_client(state):
     return {
         "assignment": state.get("assignment", ""),
         "summary": state.get("summary", ""),
+        "source_question": state.get("source_question"),
         "concepts": state.get("concepts", []),
         "prerequisites": state.get("prerequisites", []),
         "learning_path": state.get("learning_path", []),
@@ -144,9 +163,18 @@ def analyze_assignment(request):
     except ProviderError as exc:
         return _provider_error_response(exc)
 
+    _start_learning_session(request, assignment, context, result)
+    request.session.pop("pdf_extraction", None)
+    payload = _learning_state_for_client(request.session["learning_session"])
+    payload["assignment"] = assignment
+    return JsonResponse(payload)
+
+
+def _start_learning_session(request, assignment, context, result, source_question=None):
     state = {
         "assignment": assignment,
         "context": context,
+        "source_question": source_question,
         "learning_stage": "exploring",
         "hint_level": 0,
         "history": [],
@@ -165,9 +193,98 @@ def analyze_assignment(request):
         "hint_level": 0,
         "history": [],
     }
-    payload = _learning_state_for_client(state)
-    payload["assignment"] = assignment
-    return JsonResponse(payload)
+
+
+@require_POST
+def extract_assignment_pdf(request):
+    uploaded = request.FILES.get("file")
+    if uploaded is None:
+        return _error("Choose a PDF file to upload.", 400)
+    if not uploaded.name.lower().endswith(".pdf"):
+        return _error("Upload a file with a .pdf extension.", 400)
+    try:
+        limit = max_upload_bytes()
+        limit_mb = (limit + 1024 * 1024 - 1) // (1024 * 1024)
+        if uploaded.size > limit:
+            raise PdfExtractionError(
+                f"The PDF exceeds the {limit_mb} MB upload limit.", 413
+            )
+        data = uploaded.read(limit + 1)
+        if len(data) > limit:
+            raise PdfExtractionError(
+                f"The PDF exceeds the {limit_mb} MB upload limit.", 413
+            )
+        result = analyze_pdf(data)
+    except PdfExtractionError as exc:
+        response = {"error": str(exc)}
+        if exc.extracted_text:
+            response.update(
+                {
+                    "page_count": exc.page_count,
+                    "extracted_text": exc.extracted_text,
+                }
+            )
+        return JsonResponse(response, status=exc.status_code)
+
+    document_id = str(uuid.uuid4())
+    request.session["pdf_extraction"] = {
+        "document_id": document_id,
+        "page_count": result["page_count"],
+        "extracted_text": result["extracted_text"],
+        "questions": result["questions"],
+    }
+    return JsonResponse(
+        {
+            "document_id": document_id,
+            "page_count": result["page_count"],
+            "extracted_text": result["extracted_text"],
+            "questions": result["questions"],
+        }
+    )
+
+
+@require_POST
+def start_pdf_question(request):
+    try:
+        payload = _read_json(request)
+        document_id = _text(payload, "document_id", required=True, max_length=36)
+        question_id = _text(payload, "question_id", required=True, max_length=8)
+        assignment = _text(
+            payload, "question_text", required=True, max_length=MAX_ASSIGNMENT_LENGTH
+        )
+        if not re.fullmatch(r"[0-9a-f-]{36}", document_id):
+            raise RequestValidationError("The extracted document is no longer available.")
+        if not re.fullmatch(r"q[1-9][0-9]{0,2}", question_id):
+            raise RequestValidationError("Choose a valid extracted question.")
+        extraction = request.session.get("pdf_extraction")
+        if (
+            not isinstance(extraction, dict)
+            or extraction.get("document_id") != document_id
+        ):
+            return _error("This extracted document has expired. Upload it again.", 409)
+        question = next(
+            (item for item in extraction.get("questions", []) if item.get("id") == question_id),
+            None,
+        )
+        if question is None:
+            return _error("This question was not found in the extracted document.", 404)
+        result = build_analysis(assignment, "")
+    except RequestValidationError as exc:
+        return _error(str(exc), 400)
+    except ProviderError as exc:
+        return _provider_error_response(exc)
+
+    source_question = {
+        "label": question["label"],
+        "page_start": question["page_start"],
+        "page_end": question["page_end"],
+        "text": assignment,
+    }
+    _start_learning_session(request, assignment, "", result, source_question)
+    request.session.pop("pdf_extraction", None)
+    response = _learning_state_for_client(request.session["learning_session"])
+    response["assignment"] = assignment
+    return JsonResponse(response)
 
 
 @require_POST

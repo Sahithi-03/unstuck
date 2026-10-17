@@ -3,6 +3,15 @@
   const setupPanel = document.querySelector("#setup-panel");
   const workspace = document.querySelector("#learning-workspace");
   const assignmentError = document.querySelector("#assignment-error");
+  const pdfFileInput = document.querySelector("#pdf-file");
+  const pdfDropZone = document.querySelector("#pdf-drop-zone");
+  const maxPdfUploadBytes = Number(pdfDropZone.dataset.maxUploadBytes) || 12 * 1024 * 1024;
+  const maxPdfUploadMb = Number(pdfDropZone.dataset.maxUploadMb) || 12;
+  const pdfStatus = document.querySelector("#pdf-status");
+  const pdfProgress = document.querySelector("#pdf-progress");
+  const questionDialog = document.querySelector("#question-dialog");
+  const questionCandidates = document.querySelector("#question-candidates");
+  const selectedQuestionText = document.querySelector("#selected-question-text");
   const stepError = document.querySelector("#step-error");
   const nav = document.querySelector("#step-nav");
   const mathAttempt = document.querySelector("#math-attempt");
@@ -19,9 +28,22 @@
   let submissionPending = false;
   let resourceRequestId = 0;
   let resourceQuestionText = "";
+  let selectedPdf = null;
+  let pdfExtraction = null;
+  let selectedQuestionId = "";
+  let uploadController = null;
+  let pdfUploadPending = false;
+  let questionStartPending = false;
+  const questionEdits = new Map();
 
   function csrfToken() {
     return document.querySelector("[name=csrfmiddlewaretoken]").value;
+  }
+
+  function renderSelectedQuestionPreview() {
+    const preview = document.querySelector("#selected-question-preview");
+    preview.hidden = !selectedQuestionText.value.trim();
+    renderMathText(preview, selectedQuestionText.value);
   }
 
   async function requestJson(url, { method = "GET", data } = {}) {
@@ -53,7 +75,9 @@
   }
 
   function mathText(parent, text) {
-    const source = String(text || "");
+    const source = String(text || "")
+      .replace(/\\{2,}([a-zA-Z])/g, (_match, commandStart) => `\\${commandStart}`)
+      .replace(/\\{2,}(\(|\)|\[|\])/g, (_match, delimiter) => `\\${delimiter}`);
     const pattern = /\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$\$([\s\S]+?)\$\$|\$([^$\n]+?)\$|\|\|([^|\n]{1,80})\|\|_(infinity|inf|[0-9]+)|\\\|([^\\\n]{1,80})\\\|_(infinity|inf|[0-9]+)/g;
     let offset = 0;
     let match;
@@ -271,8 +295,196 @@
     learningSession = session;
     setupPanel.hidden = true;
     workspace.hidden = false;
+    const sourceReview = document.querySelector("#source-question-review");
+    sourceReview.hidden = !session.source_question;
+    if (session.source_question) {
+      const question = session.source_question;
+      document.querySelector("#source-question-summary").textContent =
+        `${question.label} · page${question.page_start === question.page_end ? "" : "s"} ${question.page_start}${question.page_end === question.page_start ? "" : `–${question.page_end}`}`;
+      renderMathText(document.querySelector("#source-question-text"), question.text);
+    }
     updateProgress(session);
     if (session.active_step) renderStep(session.active_step);
+  }
+
+  function formatFileSize(bytes) {
+    return bytes < 1024 * 1024
+      ? `${Math.max(1, Math.round(bytes / 1024))} KB`
+      : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function clearPdfState(message = "") {
+    selectedPdf = null;
+    pdfExtraction = null;
+    selectedQuestionId = "";
+    questionEdits.clear();
+    pdfFileInput.value = "";
+    document.querySelector("#pdf-file-status").hidden = true;
+    document.querySelector("#upload-pdf").disabled = true;
+    document.querySelector("#review-extracted-questions").hidden = true;
+    document.querySelector("#pdf-recovered-text-details").hidden = true;
+    document.querySelector("#pdf-recovered-text").value = "";
+    pdfStatus.textContent = message;
+  }
+
+  function choosePdf(file) {
+    if (!file) return;
+    pdfExtraction = null;
+    selectedQuestionId = "";
+    questionEdits.clear();
+    selectedPdf = file;
+    document.querySelector("#pdf-file-name").textContent =
+      `${file.name} · ${formatFileSize(file.size)}`;
+    document.querySelector("#pdf-file-status").hidden = false;
+    document.querySelector("#upload-pdf").disabled = false;
+    document.querySelector("#review-extracted-questions").hidden = true;
+    document.querySelector("#pdf-recovered-text-details").hidden = true;
+    pdfStatus.textContent = "";
+    assignmentError.hidden = true;
+  }
+
+  function selectQuestion(question) {
+    selectedQuestionId = question.id;
+    selectedQuestionText.disabled = false;
+    selectedQuestionText.value = questionEdits.get(question.id) ?? question.text;
+    renderSelectedQuestionPreview();
+    document.querySelector("#start-selected-question").disabled = !selectedQuestionText.value.trim();
+    questionDialog.querySelectorAll("[data-question-id]").forEach((button) => {
+      const selected = button.dataset.questionId === question.id;
+      button.setAttribute("aria-pressed", String(selected));
+      button.closest(".question-candidate").classList.toggle("is-selected", selected);
+    });
+    document.querySelector("#question-dialog-error").hidden = true;
+  }
+
+  function openQuestionSelection(result) {
+    pdfExtraction = result;
+    clear(questionCandidates);
+    const questions = result.questions;
+    questions.forEach((question) => {
+      const card = document.createElement("article");
+      card.className = "question-candidate";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "question-candidate-select";
+      button.dataset.questionId = question.id;
+      button.setAttribute("aria-pressed", "false");
+      const title = document.createElement("strong");
+      title.textContent = question.label;
+      const pages = document.createElement("span");
+      pages.className = "question-page-range";
+      pages.textContent = `Page${question.page_start === question.page_end ? "" : "s"} ${question.page_start}${question.page_end === question.page_start ? "" : `–${question.page_end}`}`;
+      const preview = document.createElement("span");
+      preview.className = "question-preview";
+      mathText(preview, question.text);
+      button.append(title, pages, preview);
+      card.appendChild(button);
+      if (question.subparts.length) {
+        const subparts = document.createElement("p");
+        subparts.className = "question-subparts";
+        mathText(subparts, `Subparts: ${question.subparts.join(", ")}`);
+        card.appendChild(subparts);
+      }
+      if (question.extraction_warnings.length) {
+        const warning = document.createElement("p");
+        warning.className = "question-warning";
+        warning.textContent = `Check extraction: ${question.extraction_warnings.join(" ")}`;
+        card.appendChild(warning);
+      }
+      questionCandidates.appendChild(card);
+    });
+    document.querySelector("#question-dialog-title").textContent =
+      questions.length === 1 ? "Review this extracted question" : "Choose a question to work on";
+    document.querySelector("#question-dialog-help").textContent =
+      `${questions.length} question${questions.length === 1 ? "" : "s"} detected across ${result.page_count} page${result.page_count === 1 ? "" : "s"}. Review and correct the selected text before starting.`;
+    selectedQuestionId = "";
+    selectedQuestionText.value = "";
+    selectedQuestionText.disabled = true;
+    renderSelectedQuestionPreview();
+    document.querySelector("#start-selected-question").disabled = true;
+    if (!questionDialog.open) questionDialog.showModal();
+    if (questions.length === 1) selectQuestion(questions[0]);
+    document.querySelector("#question-candidates [data-question-id]")?.focus();
+  }
+
+  async function extractPdf() {
+    if (!selectedPdf || pdfUploadPending) return;
+    if (!selectedPdf.name.toLowerCase().endsWith(".pdf")) {
+      pdfStatus.textContent = "Choose a PDF file. You can still paste the assignment text below.";
+      return;
+    }
+    if (selectedPdf.size > maxPdfUploadBytes) {
+      pdfStatus.textContent = `This file exceeds the ${maxPdfUploadMb} MB upload limit.`;
+      return;
+    }
+    const button = document.querySelector("#upload-pdf");
+    const formData = new FormData();
+    formData.append("file", selectedPdf);
+    uploadController = new AbortController();
+    pdfUploadPending = true;
+    setBusy(button, true, "Extracting questions…");
+    document.querySelector("#analyze-button").disabled = true;
+    document.querySelector("#cancel-pdf-upload").hidden = false;
+    document.querySelector("#remove-pdf").disabled = true;
+    pdfProgress.hidden = false;
+    pdfProgress.removeAttribute("value");
+    pdfStatus.textContent = "Uploading the PDF and reading its pages with Nebius…";
+    try {
+      const response = await fetch("/api/assignments/pdf/extract/", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRFToken": csrfToken() },
+        body: formData,
+        signal: uploadController.signal,
+      });
+      let body;
+      try {
+        body = await response.json();
+      } catch {
+        throw new Error("The server returned an unreadable response. Please try again.");
+      }
+      if (!response.ok) {
+        if (body.extracted_text) {
+          showRecoveredText(body.extracted_text);
+          pdfStatus.textContent =
+            `${body.error || "Question identification failed."} Extracted text is available below for manual correction. Retry this file or start a manual text session.`;
+        }
+        throw new Error(body.error || "PDF extraction failed. Please try again.");
+      }
+      if (!body.questions.length) {
+        showRecoveredText(body.extracted_text || "");
+        pdfStatus.textContent = body.extracted_text
+          ? "No questions were confidently identified. Review the extracted text below, then copy a question into the assignment box."
+          : "No questions or readable text were found. Try a clearer PDF or paste the question manually.";
+        assignmentInput.focus();
+        return;
+      }
+      pdfStatus.textContent = `${body.questions.length} question${body.questions.length === 1 ? "" : "s"} detected. Review before starting.`;
+      document.querySelector("#review-extracted-questions").hidden = false;
+      openQuestionSelection(body);
+    } catch (error) {
+      if (error.name === "AbortError") {
+        pdfStatus.textContent = "PDF upload cancelled. You can choose the file again or paste the text manually.";
+      } else {
+        pdfStatus.textContent = `${error.message} You can retry this file or paste the question manually.`;
+      }
+    } finally {
+      pdfUploadPending = false;
+      uploadController = null;
+      setBusy(button, false);
+      button.disabled = !selectedPdf;
+      document.querySelector("#cancel-pdf-upload").hidden = true;
+      document.querySelector("#remove-pdf").disabled = false;
+      document.querySelector("#analyze-button").disabled = false;
+      pdfProgress.hidden = true;
+      pdfProgress.setAttribute("value", "0");
+    }
+  }
+
+  function showRecoveredText(text) {
+    document.querySelector("#pdf-recovered-text").value = text.slice(0, 50000);
+    document.querySelector("#pdf-recovered-text-details").hidden = !text;
+    assignmentInput.value = text.slice(0, 6000);
   }
 
   async function openStep(stepId) {
@@ -378,6 +590,100 @@
     }
   }
 
+  pdfFileInput.addEventListener("change", () => choosePdf(pdfFileInput.files[0]));
+  pdfDropZone.addEventListener("click", (event) => {
+    if (event.target !== pdfFileInput) pdfFileInput.click();
+  });
+  pdfDropZone.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      pdfFileInput.click();
+    }
+  });
+  ["dragenter", "dragover"].forEach((eventName) => {
+    pdfDropZone.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      pdfDropZone.classList.add("is-dragging");
+    });
+  });
+  ["dragleave", "drop"].forEach((eventName) => {
+    pdfDropZone.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      pdfDropZone.classList.remove("is-dragging");
+    });
+  });
+  pdfDropZone.addEventListener("drop", (event) => choosePdf(event.dataTransfer.files[0]));
+  document.querySelector("#upload-pdf").addEventListener("click", extractPdf);
+  document.querySelector("#remove-pdf").addEventListener("click", () => {
+    if (uploadController) uploadController.abort();
+    clearPdfState();
+  });
+  document.querySelector("#cancel-pdf-upload").addEventListener("click", () => {
+    if (uploadController) uploadController.abort();
+  });
+  document.querySelector("#review-extracted-questions").addEventListener("click", () => {
+    if (pdfExtraction?.questions?.length) openQuestionSelection(pdfExtraction);
+  });
+  document.querySelector("#use-recovered-text").addEventListener("click", () => {
+    const extracted = document.querySelector("#pdf-recovered-text").value.trim();
+    assignmentInput.value = extracted.slice(0, 6000);
+    assignmentInput.focus();
+    pdfStatus.textContent = extracted.length > 6000
+      ? "The first 6,000 characters were copied. Select and copy a shorter portion from the full extracted text if needed."
+      : "Extracted text copied to the assignment box. Review it before starting.";
+  });
+  questionCandidates.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-question-id]");
+    if (!button || !pdfExtraction) return;
+    const question = pdfExtraction.questions.find((item) => item.id === button.dataset.questionId);
+    if (question) selectQuestion(question);
+  });
+  selectedQuestionText.addEventListener("input", () => {
+    if (!selectedQuestionId) return;
+    questionEdits.set(selectedQuestionId, selectedQuestionText.value);
+    renderSelectedQuestionPreview();
+    document.querySelector("#start-selected-question").disabled = !selectedQuestionText.value.trim();
+  });
+  document.querySelector("#cancel-question-selection").addEventListener("click", () => {
+    questionDialog.close();
+  });
+  document.querySelector("#start-selected-question").addEventListener("click", async (event) => {
+    if (!pdfExtraction || !selectedQuestionId || questionStartPending) return;
+    const questionText = selectedQuestionText.value.trim();
+    if (!questionText) {
+      document.querySelector("#question-dialog-error").textContent = "The selected question cannot be empty.";
+      document.querySelector("#question-dialog-error").hidden = false;
+      selectedQuestionText.focus();
+      return;
+    }
+    questionEdits.set(selectedQuestionId, questionText);
+    questionStartPending = true;
+    const button = event.currentTarget;
+    setBusy(button, true, "Starting your learning path…");
+    document.querySelector("#question-dialog-error").hidden = true;
+    try {
+      const session = await requestJson("/api/assignments/pdf/start/", {
+        method: "POST",
+        data: {
+          document_id: pdfExtraction.document_id,
+          question_id: selectedQuestionId,
+          question_text: questionText,
+        },
+      });
+      assignmentInput.value = session.assignment;
+      questionDialog.close();
+      showWorkspace(session);
+    } catch (error) {
+      document.querySelector("#question-dialog-error").textContent =
+        `${error.message} Your selection and edits are preserved; you can retry or cancel.`;
+      document.querySelector("#question-dialog-error").hidden = false;
+    } finally {
+      questionStartPending = false;
+      setBusy(button, false);
+      button.disabled = !selectedQuestionText.value.trim();
+    }
+  });
+
   document.querySelector("#analyze-button").addEventListener("click", async (event) => {
     const button = event.currentTarget;
     assignmentError.hidden = true;
@@ -395,6 +701,7 @@
         data: { assignment },
       });
       assignmentInput.value = session.assignment;
+      clearPdfState();
       showWorkspace(session);
     } catch (error) {
       assignmentError.textContent = error.message;

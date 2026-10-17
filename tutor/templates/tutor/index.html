@@ -41,10 +41,48 @@
       <div class="assignment-card">
         <label for="assignment">What are you working on?</label>
         <textarea id="assignment" maxlength="6000" placeholder="Paste a maths problem or assignment…" required></textarea>
+        <div class="pdf-upload pdf-drop-zone" id="pdf-drop-zone" data-max-upload-bytes="{{ pdf_max_upload_bytes }}" data-max-upload-mb="{{ pdf_max_upload_mb }}" data-max-pages="{{ pdf_max_pages }}" tabindex="0" role="button" aria-label="Choose or drop a PDF assignment">
+          <input id="pdf-file" type="file" accept=".pdf,application/pdf" hidden>
+          <strong>Have an assignment PDF?</strong>
+          <span>Drop it here or click to choose a PDF. Up to {{ pdf_max_upload_mb }} MB and {{ pdf_max_pages }} pages.</span>
+        </div>
+        <div id="pdf-file-status" class="pdf-file-status" hidden>
+          <span id="pdf-file-name"></span>
+          <button id="remove-pdf" class="text-button" type="button">Remove</button>
+        </div>
+        <div class="pdf-upload-actions">
+          <button id="upload-pdf" class="button button-secondary" type="button" disabled>Extract questions</button>
+          <button id="review-extracted-questions" class="text-button" type="button" hidden>Review detected questions</button>
+          <button id="cancel-pdf-upload" class="text-button" type="button" hidden>Cancel upload</button>
+        </div>
+        <progress id="pdf-progress" class="pdf-progress" max="100" value="0" hidden></progress>
+        <p id="pdf-status" class="pdf-status" role="status" aria-live="polite"></p>
+        <details id="pdf-recovered-text-details" class="pdf-recovered-text-details" hidden>
+          <summary>Review all extracted text</summary>
+          <textarea id="pdf-recovered-text" maxlength="50000" rows="8" aria-label="Extracted PDF text for manual correction"></textarea>
+          <button id="use-recovered-text" class="text-button" type="button">Use the first 6,000 characters in the assignment box</button>
+        </details>
         <p id="assignment-error" class="inline-error" role="alert" hidden></p>
         <button id="analyze-button" class="button button-primary" type="button">Build my learning path <span aria-hidden="true">→</span></button>
       </div>
     </section>
+
+    <dialog id="question-dialog" class="question-dialog" aria-labelledby="question-dialog-title">
+      <div class="question-dialog-content">
+        <p class="label">PDF QUESTION SELECTION</p>
+        <h2 id="question-dialog-title">Choose a question to work on</h2>
+        <p id="question-dialog-help" class="question-dialog-help">Review the extracted text and correct it if needed before starting.</p>
+        <div id="question-candidates" class="question-candidates" role="group" aria-label="Detected questions"></div>
+        <label class="field-label" for="selected-question-text">Selected question <span>Edit any extraction mistakes</span></label>
+        <textarea id="selected-question-text" class="selected-question-text" maxlength="6000" rows="7" disabled></textarea>
+        <div id="selected-question-preview" class="selected-question-preview" aria-label="Formatted question preview" hidden></div>
+        <p id="question-dialog-error" class="inline-error" role="alert" hidden></p>
+        <div class="question-dialog-actions">
+          <button id="cancel-question-selection" class="button button-secondary" type="button">Cancel</button>
+          <button id="start-selected-question" class="button button-primary" type="button" disabled>Start learning</button>
+        </div>
+      </div>
+    </dialog>
 
     <section id="learning-workspace" class="learning-workspace" hidden>
       <div id="completion-banner" class="completion-banner" hidden>
@@ -53,6 +91,10 @@
       </div>
       <nav id="step-nav" class="step-nav" aria-label="Learning steps"></nav>
       <section id="step-card" class="step-card" aria-labelledby="step-title">
+        <details id="source-question-review" class="source-question-review" hidden>
+          <summary id="source-question-summary">Review the selected PDF question</summary>
+          <p id="source-question-text"></p>
+        </details>
         <div class="step-overline">
           <span id="step-position"></span>
           <span id="step-status" class="status-badge"></span>
