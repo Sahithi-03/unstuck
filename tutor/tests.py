@@ -182,7 +182,39 @@ class UnstuckViewsTests(TestCase):
 
     @patch(
         "tutor.services.tutor.complete_json",
-        return_value={
+        side_effect=[
+            {
+                    "summary": "The answer is x = 3.",
+                    "concepts": ["equations"],
+                    "prerequisites": ["arithmetic"],
+                    "learning_path": ["Review inverse operations"],
+                    "steps": [
+                        {
+                            "title": "Review inverse operations",
+                            "objective": "Use inverse operations",
+                            "instructions": "Review the property.",
+                            "prerequisite_concepts": ["arithmetic"],
+                            "practice_prompt": "Explain the operation.",
+                            "validation_criteria": "State the property.",
+                            "hints": ["Remember inverses.", "Use the definition.", "Which operation?", "Explain the next move."],
+                        }
+                    ],
+                    "search_queries": ["inverse operations"],
+            },
+            analysis_response(),
+        ],
+    )
+    def test_analysis_retries_once_after_solution_disclosure(self, complete):
+        response = self.post("/api/assignments/analyze/", {"assignment": "Solve x + 2 = 5"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["summary"], "This problem uses inverse operations.")
+        self.assertEqual(complete.call_count, 2)
+        self.assertIn("previous draft was rejected", complete.call_args.args[0])
+
+    @patch(
+        "tutor.services.tutor.complete_json",
+        side_effect=[
+            {
             "summary": "The answer is x = 3.",
             "concepts": ["equations"],
             "prerequisites": ["arithmetic"],
@@ -199,12 +231,32 @@ class UnstuckViewsTests(TestCase):
                 }
             ],
             "search_queries": ["inverse operations"],
-        },
+            },
+            {
+                "summary": "The answer is x = 3.",
+                "concepts": ["equations"],
+                "prerequisites": ["arithmetic"],
+                "learning_path": ["Review inverse operations"],
+                "steps": [
+                    {
+                        "title": "Review inverse operations",
+                        "objective": "Use inverse operations",
+                        "instructions": "Review the property.",
+                        "prerequisite_concepts": ["arithmetic"],
+                        "practice_prompt": "Explain the operation.",
+                        "validation_criteria": "State the property.",
+                        "hints": ["Remember inverses.", "Use the definition.", "Which operation?", "Explain the next move."],
+                    }
+                ],
+                "search_queries": ["inverse operations"],
+            },
+        ],
     )
-    def test_analysis_guard_rejects_solution_disclosure(self, _complete):
+    def test_analysis_guard_rejects_solution_disclosure_after_retry(self, complete):
         response = self.post("/api/assignments/analyze/", {"assignment": "Solve x + 2 = 5"})
         self.assertEqual(response.status_code, 502)
         self.assertNotIn("x = 3", response.content.decode())
+        self.assertEqual(complete.call_count, 2)
 
     @patch("tutor.services.tutor.complete_json", side_effect=ProviderError("The AI provider could not complete the request. Please try again."))
     def test_provider_failure_is_safe_and_does_not_expose_traceback(self, _complete):

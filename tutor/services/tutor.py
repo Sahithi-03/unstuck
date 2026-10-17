@@ -52,13 +52,21 @@ def _learning_prompt():
     )
 
 
-def analyze_assignment(assignment, context=""):
+def analyze_assignment(assignment, context="", _retry_disclosure=False):
+    retry_instruction = (
+        " Your previous draft was rejected because it contained answer-like text. "
+        "Regenerate the analysis with learning guidance only: do not state any numeric "
+        "answer or include a variable set equal to a number."
+        if _retry_disclosure
+        else ""
+    )
     data = complete_json(
         _learning_prompt()
         + " Identify what to learn, but do not solve the assignment. Create a short, ordered "
         "sequence of one to six meaningful checkpoints; put prerequisite understanding before "
         "advanced reasoning and do not split every arithmetic operation into its own step. "
-        "Each practice prompt must test the step objective, not request the assignment's final answer.",
+        "Each practice prompt must test the step objective, not request the assignment's final answer."
+        + retry_instruction,
         json.dumps(
             {
                 "task": "Analyze the assignment for learning needs.",
@@ -148,6 +156,8 @@ def analyze_assignment(assignment, context=""):
             }
         )
     if contains_solution_disclosure(*all_step_text):
+        if not _retry_disclosure:
+            return analyze_assignment(assignment, context, _retry_disclosure=True)
         raise ProviderError(
             "The AI response went beyond learning guidance. Please retry the analysis.", 502
         )
