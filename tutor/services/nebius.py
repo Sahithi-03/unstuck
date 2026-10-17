@@ -1,11 +1,13 @@
 import json
+import logging
 import os
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
+logger = logging.getLogger(__name__)
 BASE_URL = "https://api.tokenfactory.us-north1.nebius.com/v1/"
-REQUEST_TIMEOUT_SECONDS = 25
+REQUEST_TIMEOUT_SECONDS = 60
 
 
 class ProviderError(Exception):
@@ -43,7 +45,11 @@ def complete_json(system_prompt, user_prompt):
         )
         with urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             response_data = json.loads(response.read().decode("utf-8"))
-    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+    except HTTPError as exc:
+        logger.warning("Nebius request failed with HTTP status %s.", exc.code)
+        raise ProviderError("The AI provider could not complete the request. Please try again.") from exc
+    except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        logger.warning("Nebius request failed (%s).", type(exc).__name__)
         raise ProviderError("The AI provider could not complete the request. Please try again.") from exc
 
     try:

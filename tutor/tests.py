@@ -1,10 +1,10 @@
 import json
+from io import BytesIO
 import os
-from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.error import HTTPError
 
 from django.test import Client, TestCase
-from openai import APIConnectionError
 
 from .services.nebius import ProviderError, complete_json
 from .services import resources as resource_service
@@ -538,22 +538,49 @@ class UnstuckViewsTests(TestCase):
 
 class NebiusServiceTests(TestCase):
     @patch.dict("os.environ", {"NEBIUS_API_KEY": "test-key", "NEBIUS_MODEL": "test-model"})
-    @patch("tutor.services.nebius.OpenAI")
-    def test_malformed_json_from_sdk_becomes_provider_error(self, openai):
-        openai.return_value.chat.completions.create.return_value = SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content="not JSON"))]
+    @patch("tutor.services.nebius.urlopen")
+    def test_request_uses_api_key_and_parses_json_response(self, urlopen_mock):
+        urlopen_mock.return_value.__enter__.return_value.read.return_value = json.dumps(
+            {"choices": [{"message": {"content": '{"result": "ok"}'}}]}
+        ).encode()
+
+        result = complete_json("system", "user")
+
+        request = urlopen_mock.call_args.args[0]
+        self.assertEqual(urlopen_mock.call_args.kwargs["timeout"], 60)
+        self.assertEqual(request.get_header("Authorization"), "Bearer test-key")
+        self.assertEqual(
+            request.full_url,
+            "https://api.tokenfactory.us-north1.nebius.com/v1/chat/completions",
         )
+        self.assertEqual(result, {"result": "ok"})
+
+    @patch.dict("os.environ", {"NEBIUS_API_KEY": "test-key", "NEBIUS_MODEL": "test-model"})
+    @patch("tutor.services.nebius.urlopen", return_value=BytesIO(
+        json.dumps({"choices": [{"message": {"content": "not JSON"}}]}).encode()
+    ))
+    def test_malformed_json_response_becomes_provider_error(self, _urlopen):
         with self.assertRaisesRegex(ProviderError, "malformed JSON"):
             complete_json("system", "user")
 
     @patch.dict("os.environ", {"NEBIUS_API_KEY": "test-key", "NEBIUS_MODEL": "test-model"})
-    @patch("tutor.services.nebius.OpenAI")
-    def test_sdk_failure_becomes_safe_provider_error(self, openai):
-        openai.return_value.chat.completions.create.side_effect = APIConnectionError(
-            request=SimpleNamespace()
-        )
+    @patch("tutor.services.nebius.urlopen", side_effect=TimeoutError)
+    def test_request_failure_becomes_safe_provider_error(self, _urlopen):
         with self.assertRaisesRegex(ProviderError, "could not complete"):
             complete_json("system", "user")
+
+    @patch.dict("os.environ", {"NEBIUS_API_KEY": "test-key", "NEBIUS_MODEL": "test-model"})
+    @patch(
+        "tutor.services.nebius.urlopen",
+        side_effect=HTTPError("https://example.invalid", 401, "Unauthorized", {}, BytesIO()),
+    )
+    def test_http_failure_logs_status_without_exposing_credentials(self, _urlopen):
+        with self.assertLogs("tutor.services.nebius", level="WARNING") as logs:
+            with self.assertRaisesRegex(ProviderError, "could not complete"):
+                complete_json("system", "user")
+
+        self.assertIn("HTTP status 401", logs.output[0])
+        self.assertNotIn("test-key", logs.output[0])
 
 
 class StepValidationServiceTests(TestCase):
